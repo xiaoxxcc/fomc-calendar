@@ -1,322 +1,334 @@
-"""
-FOMC日历数据抓取脚本
-适用于GitHub Actions自动化运行
-"""
+name: Auto Update FOMC Calendar
+on:
+  schedule:
+    # 每周一中午12点（UTC时间）运行一次，对应北京时间周一晚8点
+    - cron: '0 12 * * 1'
+  workflow_dispatch: # 允许在GitHub页面上手动触发运行
+  push:
+    branches: [ main ] # 当main分支有推送时也运行（可选）
 
-import requests
-from bs4 import BeautifulSoup
-import json
-import csv
-import re
-from datetime import datetime
-import sys
+permissions:
+  contents: write # 允许工作流向仓库提交文件
 
-# 配置
-TARGET_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-}
-OUTPUT_JSON = "fomc_calendar.json"
-OUTPUT_CSV = "fomc_calendar.csv"
-OUTPUT_TXT = "fomc_dates.txt"
-DEBUG_HTML = "debug_fomc_page.html"
+jobs:
+  update-fomc-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 拉取仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-def parse_date_text(date_str, year):
-    """
-    解析FOMC日期文本
-    支持格式: "January 30-31", "Jan 30-31", "January 30", "Jan/Feb 30-1"等
-    """
-    if not date_str or not year:
-        return None, None
-    
-    # 月份映射
-    month_map = {
-        'jan': 1, 'january': 1,
-        'feb': 2, 'february': 2,
-        'mar': 3, 'march': 3,
-        'apr': 4, 'april': 4,
-        'may': 5,
-        'jun': 6, 'june': 6,
-        'jul': 7, 'july': 7,
-        'aug': 8, 'august': 8,
-        'sep': 9, 'september': 9,
-        'oct': 10, 'october': 10,
-        'nov': 11, 'november': 11,
-        'dec': 12, 'december': 12
-    }
-    
-    # 清理文本
-    date_str = date_str.strip().lower()
-    
-    # 尝试匹配各种日期格式
-    patterns = [
-        # 格式: "January 30-31"
-        r'([a-z]+)\s+(\d{1,2})\s*[-–]\s*(\d{1,2})',
-        # 格式: "January 30"
-        r'([a-z]+)\s+(\d{1,2})',
-        # 格式: "Jan/Feb 30-1" (跨月)
-        r'([a-z]+)/([a-z]+)\s+(\d{1,2})\s*[-–]\s*(\d{1,2})'
-    ]
-    
-    for pattern in patterns:
-        match = re.match(pattern, date_str)
-        if match:
-            groups = match.groups()
-            
-            if len(groups) == 3:
-                # 单月格式: month, start_day, end_day
-                month_name = groups[0]
-                start_day = int(groups[1])
-                end_day = int(groups[2])
-                
-                month = month_map.get(month_name)
-                if not month:
-                    return None, None
-                
-                # 检查是否跨月
-                if end_day < start_day:
-                    # 跨月，结束月份+1
-                    end_month = month + 1 if month < 12 else 1
-                    end_year = year if month < 12 else year + 1
-                    start_date = f"{year}-{month:02d}-{start_day:02d}"
-                    end_date = f"{end_year}-{end_month:02d}-{end_day:02d}"
-                else:
-                    # 同月
-                    start_date = f"{year}-{month:02d}-{start_day:02d}"
-                    end_date = f"{year}-{month:02d}-{end_day:02d}"
-                
-                return start_date, end_date
-            
-            elif len(groups) == 2 and not date_str.endswith('*'):
-                # 单日会议
-                month_name = groups[0]
-                day = int(groups[1])
-                
-                month = month_map.get(month_name)
-                if not month:
-                    return None, None
-                
-                date_str = f"{year}-{month:02d}-{day:02d}"
-                return date_str, date_str
-            
-            elif len(groups) == 4:
-                # 跨月格式: month1, month2, start_day, end_day
-                month1_name = groups[0]
-                month2_name = groups[1]
-                start_day = int(groups[2])
-                end_day = int(groups[3])
-                
-                month1 = month_map.get(month1_name)
-                month2 = month_map.get(month2_name)
-                
-                if not month1 or not month2:
-                    return None, None
-                
-                start_date = f"{year}-{month1:02d}-{start_day:02d}"
-                end_date = f"{year}-{month2:02d}-{end_day:02d}"
-                
-                return start_date, end_date
-    
-    return None, None
+      - name: 2. 设置Python环境并安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml
 
-def fetch_fomc_data():
-    """抓取FOMC数据主函数"""
-    print(f"正在访问: {TARGET_URL}")
-    
-    # 发送请求
-    try:
-        response = requests.get(TARGET_URL, headers=HEADERS, timeout=30)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"❌ 请求失败: {e}")
-        return []
-    
-    # 保存调试文件
-    with open(DEBUG_HTML, 'w', encoding='utf-8') as f:
-        f.write(response.text)
-    print(f"💾 页面已保存到: {DEBUG_HTML}")
-    
-    # 解析HTML
-    soup = BeautifulSoup(response.content, 'lxml')
-    meetings = []
-    
-    # 方法1: 查找年份面板
-    year_panels = soup.find_all('div', class_='panel panel-default')
-    print(f"找到 {len(year_panels)} 个年份面板")
-    
-    if not year_panels:
-        # 方法2: 查找所有表格
-        print("未找到年份面板，尝试查找表格...")
-        tables = soup.find_all('table')
-        for table in tables:
-            # 尝试从表格中提取年份
-            year_match = re.search(r'20\d{2}', table.get_text())
-            if year_match:
-                year = int(year_match.group())
-                rows = table.find_all('tr')[1:]  # 跳过表头
-                for row in rows:
-                    cols = row.find_all('td')
-                    if len(cols) >= 2:
-                        date_text = cols[0].get_text(strip=True)
-                        meeting_type = cols[1].get_text(strip=True)
-                        
-                        is_sep = '*' in date_text or 'sep' in meeting_type.lower()
-                        start_date, end_date = parse_date_text(date_text.replace('*', ''), year)
-                        
-                        if start_date:
-                            meetings.append({
-                                'year': year,
-                                'start_date': start_date,
-                                'end_date': end_date,
-                                'summary': meeting_type,
-                                'is_sep': is_sep,
-                                'has_press': is_sep
-                            })
-    else:
-        # 处理年份面板
-        for panel in year_panels:
-            # 提取年份
-            year_elem = panel.find(['h2', 'h3', 'h4', 'div', 'span'], class_=re.compile(r'.*year.*|.*panel-title.*'))
-            if year_elem:
-                year_text = year_elem.get_text()
-                year_match = re.search(r'20\d{2}', year_text)
-                if year_match:
-                    year = int(year_match.group())
-                else:
-                    continue
-            else:
-                continue
-            
-            print(f"处理 {year} 年...")
-            
-            # 在面板中查找会议
-            # 尝试多种选择器
-            meeting_selectors = [
-                'table',  # 表格形式
-                '.fomc-meeting',  # 专门的class
-                '.row',  # 行
-                'tr'  # 表格行
-            ]
-            
-            for selector in meeting_selectors:
-                meeting_items = panel.select(selector)
-                if meeting_items and len(meeting_items) > 0:
-                    for item in meeting_items:
-                        # 跳过空行
-                        if not item.get_text(strip=True):
-                            continue
-                        
-                        # 尝试提取日期
-                        date_elem = item.find(['td', 'div', 'span'], class_=re.compile(r'.*date.*'))
-                        if date_elem:
-                            date_text = date_elem.get_text(strip=True)
-                            
-                            # 尝试提取会议类型
-                            type_elem = item.find(['td', 'div', 'span'], class_=re.compile(r'.*type.*|.*meeting.*'))
-                            meeting_type = type_elem.get_text(strip=True) if type_elem else "FOMC Meeting"
-                            
-                            # 检查是否为SEP
-                            is_sep = '*' in date_text or 'summary of economic projections' in meeting_type.lower()
-                            
-                            # 解析日期
-                            clean_date = date_text.replace('*', '').replace('†', '').strip()
-                            start_date, end_date = parse_date_text(clean_date, year)
-                            
-                            if start_date:
-                                meetings.append({
-                                    'year': year,
-                                    'start_date': start_date,
-                                    'end_date': end_date,
-                                    'summary': meeting_type,
-                                    'is_sep': is_sep,
-                                    'has_press': is_sep
-                                })
-                                break  # 找到一个有效的就停止当前循环
-    
-    print(f"✅ 成功抓取 {len(meetings)} 个会议")
-    return meetings
+      - name: 3. 执行FOMC数据抓取脚本
+        run: |
+          cat > fetch_fomc.py << 'EOF'
+          import requests
+          from bs4 import BeautifulSoup
+          from datetime import datetime
+          import json
+          import csv
+          import re
 
-def save_data(meetings):
-    """保存数据到文件"""
-    # 按开始日期排序
-    meetings.sort(key=lambda x: x['start_date'])
-    
-    # 1. 保存为JSON
-    with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
-        json.dump({
-            "meta": {
-                "last_updated": datetime.now().isoformat(),
-                "source": TARGET_URL,
-                "count": len(meetings),
-                "note": "FOMC Meeting Calendar Data"
-            },
-            "meetings": meetings
-        }, f, indent=2, ensure_ascii=False)
-    
-    # 2. 保存为CSV
-    if meetings:
-        fieldnames = ['year', 'start_date', 'end_date', 'summary', 'is_sep', 'has_press']
-        with open(OUTPUT_CSV, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(meetings)
-    else:
-        # 创建空CSV文件
-        with open(OUTPUT_CSV, 'w', encoding='utf-8', newline='') as f:
-            f.write("year,start_date,end_date,summary,is_sep,has_press\n")
-    
-    # 3. 保存为纯文本
-    with open(OUTPUT_TXT, 'w', encoding='utf-8') as f:
-        if meetings:
-            for m in meetings:
-                sep_mark = " *" if m['is_sep'] else ""
-                f.write(f"{m['start_date']} to {m['end_date']}: {m['summary']}{sep_mark}\n")
-        else:
-            f.write("No meetings found.\n")
-    
-    print(f"📁 数据已保存到: {OUTPUT_JSON}, {OUTPUT_CSV}, {OUTPUT_TXT}")
+          # 配置
+          TARGET_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+          HEADERS = {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.5',
+              'Cache-Control': 'no-cache'
+          }
 
-def main():
-    """主函数"""
-    print("🚀 开始抓取FOMC日历数据...")
-    
-    try:
-        # 抓取数据
-        meetings = fetch_fomc_data()
-        
-        # 如果没抓到数据，使用备用数据
-        if not meetings:
-            print("⚠️ 未抓到数据，使用示例数据")
-            meetings = [
-                {
-                    'year': 2024,
-                    'start_date': '2024-01-30',
-                    'end_date': '2024-01-31',
-                    'summary': 'FOMC Meeting',
-                    'is_sep': False,
-                    'has_press': False
-                },
-                {
-                    'year': 2024,
-                    'start_date': '2024-03-19',
-                    'end_date': '2024-03-20',
-                    'summary': 'FOMC Meeting*',
-                    'is_sep': True,
-                    'has_press': True
-                }
-            ]
-        
-        # 保存数据
-        save_data(meetings)
-        
-        print("🎉 任务完成！")
-        return 0
-        
-    except Exception as e:
-        print(f"❌ 运行失败: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
+          def parse_month_text(month_str):
+              """将月份文本转换为数字 (1-12)"""
+              month_map = {
+                  'jan': 1, 'january': 1,
+                  'feb': 2, 'february': 2,
+                  'mar': 3, 'march': 3,
+                  'apr': 4, 'april': 4,
+                  'may': 5,
+                  'jun': 6, 'june': 6,
+                  'jul': 7, 'july': 7,
+                  'aug': 8, 'august': 8,
+                  'sep': 9, 'september': 9,
+                  'oct': 10, 'october': 10,
+                  'nov': 11, 'november': 11,
+                  'dec': 12, 'december': 12
+              }
+              # 处理类似 "Apr/May" 的情况，取第一个月
+              clean_month = month_str.lower().split('/')[0].strip()
+              # 取前3个字符作为缩写
+              short_month = clean_month[:3]
+              return month_map.get(clean_month) or month_map.get(short_month)
 
-if __name__ == "__main__":
-    sys.exit(main())
+          def parse_date_range(date_str, month, year):
+              """
+              解析日期范围字符串，如 "27-28", "30-1"
+              返回: (start_date, end_date)
+              """
+              # 移除所有非数字和横杠的字符
+              clean_date = re.sub(r'[^\d\-]', '', date_str)
+              
+              if '-' not in clean_date:
+                  # 单日会议
+                  day = int(clean_date)
+                  start_date = f"{year:04d}-{month:02d}-{day:02d}"
+                  return start_date, start_date
+              
+              # 分割开始日和结束日
+              parts = clean_date.split('-')
+              if len(parts) != 2:
+                  raise ValueError(f"无效的日期格式: {date_str}")
+              
+              start_day, end_day = map(int, parts)
+              
+              # 处理跨月情况（如4月30日-5月1日）
+              end_month = month
+              end_year = year
+              
+              if end_day < start_day:
+                  # 结束日小于开始日，说明跨月
+                  end_month = month + 1
+                  if end_month > 12:
+                      end_month = 1
+                      end_year = year + 1
+              
+              # 构建日期字符串
+              start_date = f"{year:04d}-{month:02d}-{start_day:02d}"
+              end_date = f"{end_year:04d}-{end_month:02d}-{end_day:02d}"
+              
+              return start_date, end_date
+
+          def fetch_and_parse_fomc_meetings():
+              """
+              主函数：从美联储官网抓取并解析FOMC会议数据
+              返回: 会议列表
+              """
+              print(f"📡 正在访问美联储官网: {TARGET_URL}")
+              try:
+                  resp = requests.get(TARGET_URL, headers=HEADERS, timeout=30)
+                  resp.raise_for_status()
+              except Exception as e:
+                  print(f"❌ 网络请求失败: {e}")
+                  return []
+
+              soup = BeautifulSoup(resp.content, 'lxml')
+              all_meetings = []
+              
+              # 1. 找到所有年份面板
+              year_panels = soup.find_all('div', class_='panel panel-default')
+              print(f"🔍 找到 {len(year_panels)} 个年份面板")
+              
+              for panel_index, panel in enumerate(year_panels):
+                  # 2. 从面板标题提取年份（例如 "2026 FOMC Meetings"）
+                  year_heading = panel.find('div', class_='panel-heading')
+                  if not year_heading:
+                      continue
+                      
+                  # 使用正则表达式提取4位数的年份
+                  year_match = re.search(r'\b(20\d\d)\b', year_heading.get_text())
+                  if not year_match:
+                      continue
+                      
+                  current_year = int(year_match.group(1))
+                  print(f"  [{panel_index+1}] 处理 {current_year} 年...")
+                  
+                  # 3. 找到该年份下的所有会议行
+                  # 注意：官网有两种样式，都需要捕获
+                  meeting_rows = panel.find_all('div', class_='row fomc-meeting')
+                  # 带阴影样式的行
+                  shaded_rows = panel.find_all('div', class_='fomc-meeting--shaded row fomc-meeting')
+                  meeting_rows.extend(shaded_rows)
+                  
+                  if not meeting_rows:
+                      print(f"    警告: 在 {current_year} 年面板中未找到会议数据")
+                      continue
+                  
+                  meeting_count = 0
+                  for row in meeting_rows:
+                      # 4. 提取月份和日期
+                      month_elem = row.find('div', class_='fomc-meeting__month')
+                      date_elem = row.find('div', class_='fomc-meeting__date')
+                      
+                      if not (month_elem and date_elem):
+                          continue
+                          
+                      month_text = month_elem.get_text(strip=True)
+                      date_text = date_elem.get_text(strip=True)
+                      
+                      if not month_text or not date_text:
+                          continue
+                      
+                      # 5. 处理月份文本
+                      month_num = parse_month_text(month_text)
+                      if month_num is None:
+                          print(f"    无法解析月份: {month_text}")
+                          continue
+                      
+                      # 6. 判断是否为SEP会议（带星号*）
+                      is_sep = '*' in date_text
+                      has_press = is_sep  # SEP会议都有新闻发布会
+                      
+                      # 7. 解析日期范围
+                      clean_date = date_text.replace('*', '').strip()
+                      try:
+                          start_date, end_date = parse_date_range(clean_date, month_num, current_year)
+                      except (ValueError, TypeError) as e:
+                          print(f"    日期解析错误 '{date_text}': {e}")
+                          continue
+                      
+                      # 8. 构建会议信息
+                      meeting_info = {
+                          'year': current_year,
+                          'start_date': start_date,
+                          'end_date': end_date,
+                          'month_display': month_text,
+                          'date_display': clean_date,
+                          'is_sep': is_sep,
+                          'has_press': has_press,
+                          'summary': f"FOMC Meeting{' *SEP' if is_sep else ''}"
+                      }
+                      all_meetings.append(meeting_info)
+                      meeting_count += 1
+                  
+                  print(f"    在 {current_year} 年找到 {meeting_count} 个会议")
+              
+              # 9. 按开始日期排序
+              all_meetings.sort(key=lambda x: x['start_date'])
+              print(f"✅ 总计抓取到 {len(all_meetings)} 个FOMC会议")
+              return all_meetings
+
+          def save_data(meetings):
+              """将会议数据保存为JSON、CSV和TXT文件"""
+              if not meetings:
+                  print("⚠️  未获取到数据，将创建空文件")
+                  meetings = []
+              
+              current_time = datetime.now().isoformat()
+              
+              # 1. 保存为JSON
+              json_data = {
+                  'meta': {
+                      'last_updated': current_time,
+                      'source': TARGET_URL,
+                      'count': len(meetings),
+                      'note': 'FOMC Meeting Calendar Data'
+                  },
+                  'meetings': meetings
+              }
+              
+              with open('fomc_calendar.json', 'w', encoding='utf-8') as f:
+                  json.dump(json_data, f, indent=2, ensure_ascii=False)
+              
+              # 2. 保存为CSV
+              if meetings:
+                  with open('fomc_calendar.csv', 'w', encoding='utf-8', newline='') as f:
+                      # 精简字段，便于使用
+                      fieldnames = ['year', 'start_date', 'end_date', 'summary', 'is_sep', 'has_press']
+                      writer = csv.DictWriter(f, fieldnames=fieldnames)
+                      writer.writeheader()
+                      for m in meetings:
+                          writer.writerow({
+                              'year': m['year'],
+                              'start_date': m['start_date'],
+                              'end_date': m['end_date'],
+                              'summary': m['summary'],
+                              'is_sep': m['is_sep'],
+                              'has_press': m['has_press']
+                          })
+              else:
+                  # 创建只有表头的CSV文件
+                  with open('fomc_calendar.csv', 'w', encoding='utf-8', newline='') as f:
+                      f.write('year,start_date,end_date,summary,is_sep,has_press\n')
+              
+              # 3. 保存为纯文本
+              with open('fomc_dates.txt', 'w', encoding='utf-8') as f:
+                  if meetings:
+                      for m in meetings:
+                          sep_marker = ' *SEP' if m['is_sep'] else ''
+                          f.write(f"{m['start_date']} 至 {m['end_date']}{sep_marker}\n")
+                  else:
+                      f.write("未找到会议数据\n")
+              
+              print(f"💾 数据文件已保存:")
+              print(f"   - fomc_calendar.json ({len(meetings)} 个会议)")
+              print(f"   - fomc_calendar.csv")
+              print(f"   - fomc_dates.txt")
+
+          # 主程序入口
+          if __name__ == "__main__":
+              print("=" * 60)
+              print("🚀 FOMC日历数据自动抓取任务开始")
+              print("=" * 60)
+              
+              # 正确调用函数
+              meetings_data = fetch_and_parse_fomc_meetings()
+              
+              # 保存数据
+              save_data(meetings_data)
+              
+              print("-" * 60)
+              
+              # 显示一些示例数据
+              if meetings_data:
+                  print("📅 最近5个会议:")
+                  for i, meeting in enumerate(meetings_data[:5], 1):
+                      sep_info = " (SEP会议)" if meeting['is_sep'] else ""
+                      print(f"  {i}. {meeting['start_date']} 至 {meeting['end_date']}{sep_info}")
+                  
+                  print(f"\n📅 未来5个会议（从今天起）:")
+                  today = datetime.now().date()
+                  future_meetings = [m for m in meetings_data if datetime.strptime(m['start_date'], '%Y-%m-%d').date() >= today]
+                  for i, meeting in enumerate(future_meetings[:5], 1):
+                      sep_info = " (SEP会议)" if meeting['is_sep'] else ""
+                      print(f"  {i}. {meeting['start_date']} 至 {meeting['end_date']}{sep_info}")
+              
+              print("=" * 60)
+              print("🎉 任务完成！")
+              print("=" * 60)
+          EOF
+          
+          echo "开始执行Python脚本..."
+          python3 fetch_fomc.py
+
+      - name: 4. 查看生成的文件
+        run: |
+          echo "=== 生成的文件列表 ==="
+          ls -la *.json *.csv *.txt 2>/dev/null || echo "未找到数据文件"
+          echo ""
+          echo "=== JSON文件预览（前3个会议）==="
+          if [ -f "fomc_calendar.json" ]; then
+            jq '.meetings[0:3]' fomc_calendar.json 2>/dev/null || head -20 fomc_calendar.json
+          else
+            echo "fomc_calendar.json 文件不存在"
+          fi
+          echo ""
+          echo "=== 纯文本文件内容 ==="
+          if [ -f "fomc_dates.txt" ]; then
+            head -10 fomc_dates.txt
+          else
+            echo "fomc_dates.txt 文件不存在"
+          fi
+
+      - name: 5. 提交更新到仓库
+        run: |
+          # 配置Git用户
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 添加生成的数据文件
+          git add fomc_calendar.json fomc_calendar.csv fomc_dates.txt 2>/dev/null || echo "注意：未找到数据文件"
+          
+          # 检查是否有文件变更
+          if git diff --staged --quiet; then
+            echo "ℹ️  数据无变化，无需提交。"
+          else
+            # 提交并推送
+            git commit -m "🤖 自动更新FOMC日历数据 [$(date +'%Y-%m-%d %H:%M UTC')]"
+            git push
+            echo "✅ 数据更新已提交并推送！"
+          fi
