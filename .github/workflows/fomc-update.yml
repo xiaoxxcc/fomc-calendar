@@ -1,183 +1,144 @@
-name: Auto Update FOMC Calendar
-on:
-  schedule:
-    - cron: '0 12 * * 3'  # 每周三UTC中午12点（北京时间晚8点）运行，避开官网可能的更新时段
-  workflow_dispatch:       # 支持手动触发
-  push:
-    branches: [ main ]
+import requests
+from bs4 import BeautifulSoup
+import json, csv
+from datetime import datetime
 
-permissions:
-  contents: write
+# --- 核心配置 ---
+TARGET_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+}
+OUTPUT_JSON = "fomc_calendar.json"
+OUTPUT_CSV = "fomc_calendar.csv"
+OUTPUT_TXT = "fomc_dates.txt"
+# -----------------
 
-jobs:
-  update-fomc-data:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 1. 拉取仓库代码
-        uses: actions/checkout@v4
+def fetch_and_parse():
+    """主抓取与解析函数"""
+    print(f"正在访问: {TARGET_URL}")
+    try:
+        resp = requests.get(TARGET_URL, headers=HEADERS, timeout=25)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"❌ 网络请求失败: {e}")
+        return None
 
-      - name: 2. 安装Python及依赖
-        run: |
-          sudo apt-get update
-          pip3 install requests beautifulsoup4 lxml
+    # --- 新增：保存网页快照用于调试 ---
+    debug_html_path = "debug_fomc_page.html"
+    with open(debug_html_path, "w", encoding="utf-8") as f:
+        f.write(resp.text)
+    print(f"💾 已将页面HTML保存至 {debug_html_path}，用于分析结构")
+    # ---------------------------------
 
-      - name: 3. 运行稳健的抓取脚本
-        run: |
-          cat > fetch_fomc.py << 'EOF'
-          import requests
-          from bs4 import BeautifulSoup
-          import json, csv
-          from datetime import datetime
+    soup = BeautifulSoup(resp.content, 'lxml')
+    meetings = []
 
-          # --- 核心配置 ---
-          TARGET_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-          HEADERS = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
-          OUTPUT_JSON = "fomc_calendar.json"
-          OUTPUT_CSV = "fomc_calendar.csv"
-          OUTPUT_TXT = "fomc_dates.txt"
-          # -----------------
+    # --- 关键：多种选择器策略，提高容错率 ---
+    # 策略一：尝试查找所有包含“panel panel-default”的div（这是官网历史使用的年份板块容器）
+    year_panels = soup.find_all('div', class_='panel panel-default')
+    
+    print(f"🔍 找到了 {len(year_panels)} 个疑似‘年份面板’(panel panel-default)的区块。")
+    
+    for panel in year_panels:
+        # 在板块内找年份
+        year_title = panel.find('h4', class_='panel-title')
+        if not year_title:
+            print("  ⚠️ 在一个面板中未找到年份标题(h4.panel-title)，跳过。")
+            continue
+        # 从标题文本中提取年份数字
+        year_text = ''.join(filter(str.isdigit, year_title.get_text()))
+        if not year_text:
+            print(f"  ⚠️ 无法从标题文本‘{year_title.get_text()}’中提取年份，跳过。")
+            continue
+        current_year = int(year_text)
+        print(f"  🗓️  正在处理 {current_year} 年的数据...")
 
-          def fetch_and_parse():
-              """主抓取与解析函数"""
-              print(f"正在访问: {TARGET_URL}")
-              try:
-                  resp = requests.get(TARGET_URL, headers=HEADERS, timeout=25)
-                  resp.raise_for_status()
-              except Exception as e:
-                  print(f"❌ 网络请求失败: {e}")
-                  return None
+        # 在板块内找会议表格
+        table = panel.find('table')
+        if not table:
+            print(f"    ⚠️ 在{current_year}年的面板中未找到表格(table)，跳过。")
+            continue
 
-              soup = BeautifulSoup(resp.content, 'lxml')
-              meetings = []
+        # 解析表格行
+        rows = table.find_all('tr')[1:]  # 跳过表头行
+        print(f"    在该表格中找到 {len(rows)} 行数据。")
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) < 2:
+                continue
+            
+            # 第一列是日期，第二列是会议类型
+            date_cell_text = cols[0].get_text(strip=True)
+            meeting_type = cols[1].get_text(strip=True)
+            
+            print(f"      发现会议条目: 日期文本‘{date_cell_text}’， 类型‘{meeting_type}’")
+            
+            # *** 简化处理：暂时只记录原始文本，不进行复杂的日期解析 ***
+            # 待获取debug文件后，再针对性编写解析逻辑
+            start_date = f"{current_year}-未解析" 
+            end_date = f"{current_year}-未解析"
+            
+            # 判断是否为SEP会议
+            is_sep = "summary of economic projections" in meeting_type.lower()
+            
+            meetings.append({
+                "start_date": start_date,
+                "end_date": end_date,
+                "summary": meeting_type,
+                "is_sep": is_sep,
+                "has_press": is_sep,
+                "source_url": TARGET_URL,
+                "scraped_at": datetime.now().isoformat(),
+                "原始日期文本": date_cell_text, # 保留原始文本供分析
+                "数据状态": "待解析"
+            })
 
-              # --- 关键：多种选择器策略，提高容错率 ---
-              # 策略一：尝试查找所有包含“panel panel-default”的div（这是官网历史使用的年份板块容器）
-              year_panels = soup.find_all('div', class_='panel panel-default')
-              
-              for panel in year_panels:
-                  # 在板块内找年份
-                  year_title = panel.find('h4', class_='panel-title')
-                  if not year_title:
-                      continue
-                  # 从标题文本中提取年份数字
-                  year_text = ''.join(filter(str.isdigit, year_title.get_text()))
-                  if not year_text:
-                      continue
-                  current_year = int(year_text)
+    print(f"✅ 初步解析到 {len(meetings)} 个会议条目（日期待解析）")
+    return meetings
 
-                  # 在板块内找会议表格
-                  table = panel.find('table')
-                  if not table:
-                      continue
+def save_data(meetings):
+    """保存数据到文件"""
+    if not meetings:
+        print("⚠️  未获取到数据，将创建空文件。")
+        meetings = []
 
-                  # 解析表格行
-                  for row in table.find_all('tr')[1:]:  # 跳过表头行
-                      cols = row.find_all('td')
-                      if len(cols) < 2:
-                          continue
-                      
-                      # 第一列是日期，第二列是会议类型
-                      date_cell_text = cols[0].get_text(strip=True)
-                      meeting_type = cols[1].get_text(strip=True)
-                      
-                      # 清洗并构造日期字符串 (例如: "January 28-29, 2025")
-                      # 注意：这里需要将日期字符串与年份结合，并进行更精细的解析
-                      # 以下是一个简单的示例，实际需根据官网日期格式调整
-                      raw_date_str = f"{date_cell_text}, {current_year}"
-                      
-                      # 此处简化处理，实际应解析raw_date_str为start_date和end_date
-                      # 您可能需要使用dateutil或手动拆分“-”来处理日期范围
-                      start_date = f"{current_year}-01-01"  # 此处应为解析后的真实开始日期
-                      end_date = f"{current_year}-01-01"    # 此处应为解析后的真实结束日期
-                      
-                      # 判断是否为SEP会议 (通常描述中会包含相关信息)
-                      is_sep = "summary of economic projections" in meeting_type.lower()
-                      
-                      meetings.append({
-                          "start_date": start_date,
-                          "end_date": end_date,
-                          "summary": meeting_type,
-                          "is_sep": is_sep,
-                          "has_press": is_sep,  # 假设SEP会议都有新闻发布会
-                          "source_url": TARGET_URL,
-                          "scraped_at": datetime.now().isoformat()
-                      })
+    # 1. 保存为JSON
+    with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
+        json.dump({
+            "meta": {
+                "last_updated": datetime.now().isoformat(),
+                "source": TARGET_URL,
+                "count": len(meetings),
+                "备注": "此版本为调试版，日期字段尚未正确解析，请提供同目录下的debug_fomc_page.html文件以继续开发。"
+            },
+            "meetings": meetings
+        }, f, indent=2, ensure_ascii=False)
 
-              print(f"✅ 初步解析到 {len(meetings)} 个会议条目")
-              return meetings
+    # 2. 保存为CSV
+    if meetings:
+        # 包含更多字段以便分析
+        fieldnames = ["start_date", "end_date", "summary", "is_sep", "has_press", "原始日期文本", "数据状态"]
+        with open(OUTPUT_CSV, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(meetings)
+    else:
+        with open(OUTPUT_CSV, 'w', encoding='utf-8', newline='') as f:
+            f.write("start_date,end_date,summary,is_sep,has_press,原始日期文本,数据状态\n")
 
-          def save_data(meetings):
-              """保存数据到文件"""
-              if not meetings:
-                  print("⚠️  未获取到数据，将创建空文件。")
-                  meetings = []  # 确保为空列表，避免后续错误
+    # 3. 保存为纯文本TXT
+    with open(OUTPUT_TXT, 'w', encoding='utf-8') as f:
+        if meetings:
+            for m in meetings:
+                f.write(f"{m['原始日期文本']} ({m['summary']})\n")
+        else:
+            f.write("No meetings found.\n")
 
-              # 1. 保存为JSON (结构化最好)
-              with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
-                  json.dump({
-                      "meta": {
-                          "last_updated": datetime.now().isoformat(),
-                          "source": TARGET_URL,
-                          "count": len(meetings)
-                      },
-                      "meetings": meetings
-                  }, f, indent=2, ensure_ascii=False)
+    print(f"📁 数据已保存至: {OUTPUT_JSON}, {OUTPUT_CSV}, {OUTPUT_TXT}")
 
-              # 2. 保存为CSV (便于表格软件打开)
-              if meetings:
-                  fieldnames = ["start_date", "end_date", "summary", "is_sep", "has_press"]
-                  with open(OUTPUT_CSV, 'w', encoding='utf-8', newline='') as f:
-                      writer = csv.DictWriter(f, fieldnames=fieldnames)
-                      writer.writeheader()
-                      writer.writerows(meetings)
-              else:
-                  # 如果无数据，创建一个只有表头的CSV
-                  with open(OUTPUT_CSV, 'w', encoding='utf-8', newline='') as f:
-                      f.write("start_date,end_date,summary,is_sep,has_press")
-
-              # 3. 保存为纯文本TXT (仅日期，每行一个)
-              with open(OUTPUT_TXT, 'w', encoding='utf-8') as f:
-                  if meetings:
-                      for m in meetings:
-                          f.write(f"{m['start_date']} to {m['end_date']}: {m['summary']}\\n")
-                  else:
-                      f.write("No meetings found.\\n")
-
-              print(f"📁 数据已保存至: {OUTPUT_JSON}, {OUTPUT_CSV}, {OUTPUT_TXT}")
-
-          # --- 脚本执行入口 ---
-          if __name__ == "__main__":
-              print("🚀 开始执行FOMC日历抓取任务")
-              data = fetch_and_parse()
-              save_data(data)
-              print("🎉 任务完成！")
-          EOF
-
-          # 执行脚本
-          python3 fetch_fomc.py
-
-      - name: 4. 查看并验证抓取结果
-        run: |
-          echo "=== 生成的纯日期列表 (TXT) ==="
-          cat fomc_dates.txt || echo "TXT文件未生成或为空"
-          echo ""
-          echo "=== 生成的JSON数据预览 ==="
-          jq '.meetings[0:2]' fomc_calendar.json 2>/dev/null || echo "JSON文件未生成或格式错误，将显示原始内容:"
-          head -20 fomc_calendar.json 2>/dev/null || true
-
-      - name: 5. 提交变更到GitHub仓库
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          # 添加生成的数据文件
-          git add fomc_calendar.json fomc_calendar.csv fomc_dates.txt
-          # 检查是否有变更，有则提交
-          if ! git diff --staged --quiet; then
-            git commit -m "🤖 Auto-Update FOMC Calendar Data [$(date +%Y-%m-%d)]"
-            git push
-            echo "✅ 数据更新已提交并推送！"
-          else
-            echo "ℹ️  数据无变化，无需提交。"
-          fi
+# --- 脚本执行入口 ---
+if __name__ == "__main__":
+    print("🚀 开始执行FOMC日历抓取任务")
+    data = fetch_and_parse()
+    save_data(data)
+    print("🎉 任务完成！")
