@@ -1,12 +1,14 @@
-# FOMC会议日期自动同步：适配美联储HTML网页日历，每周日更新，生成txt/CSV/JSON
+# FOMC会议日期自动同步：适配美联储官网最新HTML+解决403权限
 name: Auto Update FOMC Calendar
 on:
   schedule:
     - cron: '0 0 * * 0'  # 每周日UTC 0点自动更新（北京时间早8点）
   workflow_dispatch:      # 支持手动触发更新
   push:
-    branches: [main, master] # 推送到主分支触发更新
-
+    branches: [main, master]
+# 新增：授予Actions仓库写入权限，解决403 Permission denied
+permissions:
+  contents: write
 jobs:
   update-fomc-data:
     runs-on: ubuntu-latest
@@ -14,13 +16,12 @@ jobs:
       - name: 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: 安装依赖（HTML解析+日期处理）
+      - name: 安装依赖（HTML解析+请求+日期处理）
         run: |
           sudo apt update && sudo apt install -y curl jq python3-pip
-          # 核心依赖：requests(请求网页)、bs4(解析HTML)、lxml(高效解析器)、python-dateutil(日期转换)
           pip3 install requests beautifulsoup4 lxml python-dateutil
 
-      - name: 编写Python解析脚本（爬取HTML网页日历，生成多格式数据）
+      - name: 编写Python解析脚本（适配美联储官网最新结构）
         run: |
           cat > parse_fomc.py << 'EOF'
           import requests
@@ -29,139 +30,134 @@ jobs:
           import json
           import csv
           from dateutil import parser
+          import os
 
-          # 美联储官方网页日历（当前唯一可用的权威源）
-          FOMC_HTML_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-          # 浏览器请求头（避免被反爬，模拟正常访问）
+          # 美联储官方日历网页（最新有效）
+          FOMC_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+          # 模拟浏览器请求头，避免被屏蔽
           HEADERS = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-              "Accept-Language": "en-US,en;q=0.5"
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.5",
+              "Cache-Control": "no-cache"
           }
-          TIMEOUT = 30  # 请求超时时间
-          # 输出文件（保持原格式，兼容原有raw端点用法）
+          TIMEOUT = 30
+          # 输出文件（仓库根目录）
           TXT_FILE = "fomc_dates.txt"
           CSV_FILE = "fomc_calendar.csv"
           JSON_FILE = "fomc_calendar.json"
 
-          def parse_fomc_html():
-              """爬取美联储HTML网页，提取未来FOMC会议数据"""
+          def get_fomc_meetings():
+              """核心：适配官网最新结构，抓取未来FOMC会议数据"""
               try:
-                  # 发送请求获取网页内容
-                  response = requests.get(FOMC_HTML_URL, headers=HEADERS, timeout=TIMEOUT)
-                  response.raise_for_status()  # 抛出HTTP错误（如404/500）
-                  soup = BeautifulSoup(response.text, "lxml")  # 解析HTML
+                  # 发送请求
+                  res = requests.get(FOMC_URL, headers=HEADERS, timeout=TIMEOUT)
+                  res.raise_for_status()
+                  soup = BeautifulSoup(res.text, "lxml")
                   meetings = []
-                  today = date.today()  # 当前日期，过滤历史会议
+                  today = date.today()
+                  # 适配官网最新：会议项在div.fomc-meeting-wrapper下的div.fomc-meeting
+                  meeting_wrappers = soup.find_all("div", class_="fomc-meeting-wrapper")
+                  if not meeting_wrappers:
+                      # 兜底匹配：直接找所有含fomc-meeting的div
+                      meeting_wrappers = soup.find_all("div", class_=lambda c: c and "fomc-meeting" in c)
 
-                  # 核心解析逻辑：适配美联储官网最新HTML结构
-                  # 官网未来会议均在<article>标签内，日期含在<h5>/.fomc-meeting-date，SEP标*在摘要中
-                  for article in soup.find_all("article", class_=lambda c: c and "fomc-meeting" in c):
-                      # 提取会议日期（核心节点：class="fomc-meeting-date" 或 h5内的日期文本）
-                      date_elem = article.find(class_="fomc-meeting-date") or article.find("h5")
-                      if not date_elem:
+                  for wrapper in meeting_wrappers:
+                      # 提取会议日期（官网最新节点：h3.fomc-meeting__date）
+                      date_tag = wrapper.find("h3", class_="fomc-meeting__date") or wrapper.find("div", class_="date")
+                      if not date_tag:
                           continue
-                      date_text = date_elem.get_text(strip=True)
-                      # 过滤非日期文本，只保留含「年/月/日」的条目（如"March 17-18, 2026"）
-                      if not any(str(year) in date_text for year in [2025, 2026, 2027, 2028]):
+                      date_text = date_tag.get_text(strip=True).replace("\n", "").replace("\t", "")
+                      # 过滤无效日期，只保留含2025-2028的（未来会议）
+                      if not any(str(y) in date_text for y in [2025, 2026, 2027, 2028]):
                           continue
 
-                      # 解析开始/结束日期（处理格式：March 17-18, 2026 / January 28, 2026）
-                      start_date, end_date = parse_date_text(date_text)
-                      if not start_date:
+                      # 解析开始/结束日期（处理Mar 17-18, 2026 / Jan 28, 2026两种格式）
+                      start_dt, end_dt = None, None
+                      try:
+                          if "-" in date_text:
+                              # 跨天会议：拆分开始和结束
+                              part1, part2 = date_text.split("-", 1)
+                              year = part2.split(",")[-1].strip()
+                              start_str = f"{part1.strip()}, {year}"
+                              end_day = part2.split(",")[0].strip()
+                              end_str = f"{part1.split()[0]} {end_day}, {year}"
+                              start_dt = parser.parse(start_str).date()
+                              end_dt = parser.parse(end_str).date()
+                          else:
+                              # 单日会议
+                              start_dt = parser.parse(date_text).date()
+                              end_dt = start_dt
+                      except:
                           continue
+
                       # 过滤历史会议
-                      if start_date < today:
+                      if start_dt < today:
                           continue
 
-                      # 提取会议摘要（判断是否为SEP会议，官网标*为SEP+点阵图+新闻发布会）
-                      summary_elem = article.find("p") or article.find("div", class_="col-sm-12")
-                      summary = summary_elem.get_text(strip=True) if summary_elem else "FOMC Meeting"
-                      # SEP会议判断：含* / "Summary of Economic Projections" / "SEP"
-                      is_sep = "*" in summary or "SEP" in summary.upper() or "Summary of Economic Projections" in summary
-                      # SEP会议均附带新闻发布会，非SEP无（美联储官网规则）
+                      # 判断是否为SEP会议（官网SEP会议标*，或含Summary of Economic Projections）
+                      sep_tag = wrapper.find("p", class_="fomc-meeting__desc") or wrapper.find("div", class_="desc")
+                      sep_text = sep_tag.get_text(strip=True) if sep_tag else ""
+                      is_sep = "*" in date_text or "*" in sep_text or "SEP" in sep_text.upper() or "Summary of Economic Projections" in sep_text
+                      # SEP会议必带新闻发布会，非SEP无（美联储规则）
                       has_press = is_sep
+                      # 统一会议摘要
+                      summary = f"FOMC Meeting{'*' if is_sep else ''}"
 
-                      # 结构化存储（保持原字段，兼容输出）
+                      # 结构化数据
                       meetings.append({
-                          "start_date": start_date.strftime("%Y-%m-%d"),
-                          "end_date": end_date.strftime("%Y-%m-%d") if end_date else start_date.strftime("%Y-%m-%d"),
-                          "summary": f"FOMC Meeting{'*' if is_sep else ''}",  # 统一摘要格式
+                          "start_date": start_dt.strftime("%Y-%m-%d"),
+                          "end_date": end_dt.strftime("%Y-%m-%d"),
+                          "summary": summary,
                           "is_sep": is_sep,
                           "has_press": has_press
                       })
 
-                  # 去重+按开始日期升序排序
-                  meetings = [dict(t) for t in {tuple(d.items()) for d in meetings}]  # 去重
+                  # 去重+按日期升序排序
+                  meetings = list({m["start_date"]: m for m in meetings}.values())
                   meetings.sort(key=lambda x: x["start_date"])
                   return meetings
 
-              except requests.exceptions.Timeout:
-                  print("错误：请求美联储官网超时")
-                  return []
-              except requests.exceptions.HTTPError as e:
-                  print(f"错误：美联储官网请求失败 {e}")
-                  return []
               except Exception as e:
-                  print(f"错误：解析HTML失败 {str(e)}")
+                  print(f"抓取/解析失败：{str(e)}")
                   return []
 
-          def parse_date_text(date_text):
-              """解析官网日期文本为ISO日期（如March 17-18, 2026 → 2026-03-17, 2026-03-18）"""
-              try:
-                  # 处理两种格式：1. "Month DD-DD, YYYY" 2. "Month DD, YYYY"
-                  if "-" in date_text:
-                      # 拆分开始/结束日（如March 17-18, 2026 → ["March 17", "18, 2026"]）
-                      part1, part2 = date_text.split("-", 1)
-                      year = part2.split(",")[-1].strip()
-                      start_str = f"{part1.strip()}, {year}"
-                      end_day = part2.split(",")[0].strip()
-                      end_str = f"{part1.split()[0]} {end_day}, {year}"
-                      start = parser.parse(start_str).date()
-                      end = parser.parse(end_str).date()
-                      return start, end
-                  else:
-                      # 单日期格式
-                      single_date = parser.parse(date_text).date()
-                      return single_date, single_date
-              except Exception:
-                  return None, None
-
-          def save_to_files(meetings):
-              """将解析后的会议数据保存为txt/CSV/JSON（保持原格式）"""
+          def save_files(meetings):
+              """保存为txt/CSV/JSON，仓库根目录"""
               if not meetings:
-                  print("无未来FOMC会议数据可保存")
+                  print("警告：未抓取到未来FOMC会议数据")
                   return
-              # 保存纯文本：仅开始日期，每行一个（兼容原txt端点）
+              # 保存txt：仅开始日期，每行一个
               with open(TXT_FILE, "w", encoding="utf-8") as f:
                   f.write("\n".join([m["start_date"] for m in meetings]))
-              # 保存CSV：含完整字段，表头和原格式一致
+              # 保存CSV
               with open(CSV_FILE, "w", encoding="utf-8", newline="") as f:
                   fieldnames = ["start_date", "end_date", "summary", "is_sep", "has_press"]
                   writer = csv.DictWriter(f, fieldnames=fieldnames)
                   writer.writeheader()
                   writer.writerows(meetings)
-              # 保存JSON：结构化，缩进2格，兼容原JSON端点
+              # 保存JSON
               with open(JSON_FILE, "w", encoding="utf-8") as f:
                   json.dump(meetings, f, ensure_ascii=False, indent=2)
-              print(f"数据保存成功：共{len(meetings)}条未来FOMC会议记录")
+              print(f"成功生成文件！共抓取{len(meetings)}条未来FOMC会议数据")
+              # 打印文件路径，确认在根目录
+              print(f"文件路径：{os.path.abspath(TXT_FILE)}")
 
-          # 主执行
           if __name__ == "__main__":
-              fomc_meetings = parse_fomc_html()
-              save_to_files(fomc_meetings)
+              fomc_data = get_fomc_meetings()
+              save_files(fomc_data)
           EOF
-          # 运行解析脚本，生成txt/CSV/JSON文件
+          # 运行解析脚本，生成文件
           python3 parse_fomc.py
 
-      - name: 提交并推送更新到仓库
+      - name: 提交并推送文件到仓库
         run: |
-          # 配置Git机器人用户信息
+          # 配置Git用户
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          # 添加所有生成的文件（无则跳过）
-          git add fomc_dates.txt fomc_calendar.csv fomc_calendar.json 2>/dev/null || echo "无生成文件"
-          # 提交更新（无变化则跳过）
-          git commit -m "Auto update FOMC calendar $(date +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
-          # 推送到主分支
-          git push origin $GITHUB_REF_NAME || echo "Push failed (no changes)"
+          # 添加生成的文件
+          git add fomc_dates.txt fomc_calendar.csv fomc_calendar.json || echo "暂未生成文件，跳过添加"
+          # 提交（无变化则跳过）
+          git commit -m "Auto update FOMC calendar $(date +'%Y-%m-%d %H:%M:%S UTC')" || echo "无数据变化，无需提交"
+          # 推送（解决403的核心：permissions已开write）
+          git push origin $GITHUB_REF_NAME || echo "推送失败（无变化）"
