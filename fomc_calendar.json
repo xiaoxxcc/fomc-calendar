@@ -1,10 +1,11 @@
 {
   "meta": {
-    "last_updated": "2026-01-31T08:34:11.611541",
+    "last_updated": "2026-01-31T17:47:28.151320+08:00",
     "source": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
     "count": 16,
     "note": "FOMC Meeting Calendar Data (当前年及未来)",
-    "current_year": 2026
+    "current_year": 2026,
+    "timezone": "UTC+8 (Beijing Time)"
   },
   "meetings": [
     {
