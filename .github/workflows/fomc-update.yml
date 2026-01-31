@@ -24,12 +24,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml
 
-      - name: 3. 执行FOMC数据抓取脚本（仅获取当前年及未来数据）
+      - name: 3. 执行FOMC数据抓取脚本（北京时间时区）
         run: |
           cat > fetch_fomc.py << 'EOF'
           import requests
           from bs4 import BeautifulSoup
-          from datetime import datetime
+          from datetime import datetime, timezone, timedelta
           import json
           import csv
           import re
@@ -42,6 +42,13 @@ jobs:
               'Accept-Language': 'en-US,en;q=0.5',
               'Cache-Control': 'no-cache'
           }
+
+          def get_beijing_time():
+              """获取当前北京时间 (UTC+8)"""
+              utc_now = datetime.now(timezone.utc)
+              beijing_tz = timezone(timedelta(hours=8))
+              beijing_now = utc_now.astimezone(beijing_tz)
+              return beijing_now
 
           def parse_month_text(month_str):
               """将月份文本转换为数字 (1-12)"""
@@ -123,7 +130,7 @@ jobs:
                       
                   panel_year = int(year_match.group(1))
                   
-                  # 🔴 关键修改：只处理当前年份及未来的年份
+                  # 只处理当前年份及未来的年份
                   if panel_year < current_year:
                       print(f"  ⏩ 跳过 {panel_year} 年（历史数据，不需要）")
                       continue
@@ -172,12 +179,6 @@ jobs:
                           print(f"    日期解析错误 '{date_text}': {e}")
                           continue
                       
-                      # 🟢 可选：进一步过滤，只保留未来的会议
-                      # meeting_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-                      # today = datetime.now().date()
-                      # if meeting_date < today:
-                      #     continue  # 跳过已经过去的会议
-                      
                       # 构建会议信息
                       meeting_info = {
                           'year': panel_year,
@@ -205,16 +206,18 @@ jobs:
                   print("⚠️  未获取到数据，将创建空文件")
                   meetings = []
               
-              current_time = datetime.now().isoformat()
+              # 获取北京时间
+              beijing_time = get_beijing_time()
               
               # 1. 保存为JSON
               json_data = {
                   'meta': {
-                      'last_updated': current_time,
+                      'last_updated': beijing_time.isoformat(),  # 使用北京时间
                       'source': TARGET_URL,
                       'count': len(meetings),
                       'note': 'FOMC Meeting Calendar Data (当前年及未来)',
-                      'current_year': datetime.now().year
+                      'current_year': datetime.now().year,
+                      'timezone': 'UTC+8 (Beijing Time)'
                   },
                   'meetings': meetings
               }
@@ -254,12 +257,17 @@ jobs:
               print(f"   - fomc_calendar.json ({len(meetings)} 个会议)")
               print(f"   - fomc_calendar.csv")
               print(f"   - fomc_dates.txt")
+              
+              # 显示北京时间
+              beijing_str = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
+              print(f"⏰ 数据更新时间（北京时间）: {beijing_str}")
 
           # 主程序入口
           if __name__ == "__main__":
               print("=" * 60)
               print("🚀 FOMC日历数据自动抓取任务开始")
-              print(f"📅 当前年份: {datetime.now().year}")
+              beijing_time = get_beijing_time()
+              print(f"📅 当前北京时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
               print("📋 只获取当前年及未来的会议数据")
               print("=" * 60)
               
@@ -288,9 +296,9 @@ jobs:
           echo "=== 生成的文件列表 ==="
           ls -la *.json *.csv *.txt 2>/dev/null || echo "未找到数据文件"
           echo ""
-          echo "=== JSON文件预览 ==="
+          echo "=== JSON文件元信息预览 ==="
           if [ -f "fomc_calendar.json" ]; then
-            jq '.meta' fomc_calendar.json 2>/dev/null || head -10 fomc_calendar.json
+            jq '.meta' fomc_calendar.json 2>/dev/null || head -15 fomc_calendar.json
             echo ""
             echo "会议数量:"
             jq '.meetings | length' fomc_calendar.json 2>/dev/null || echo "无法获取数量"
@@ -298,11 +306,9 @@ jobs:
             echo "fomc_calendar.json 文件不存在"
           fi
           echo ""
-          echo "=== 纯文本文件内容 ==="
-          if [ -f "fomc_dates.txt" ]; then
-            cat fomc_dates.txt
-          else
-            echo "fomc_dates.txt 文件不存在"
+          echo "=== 前5个会议预览 ==="
+          if [ -f "fomc_calendar.json" ]; then
+            jq '.meetings[0:5]' fomc_calendar.json 2>/dev/null || echo "无法解析JSON"
           fi
 
       - name: 5. 提交更新到仓库
@@ -318,8 +324,9 @@ jobs:
           if git diff --staged --quiet; then
             echo "ℹ️  数据无变化，无需提交。"
           else
-            # 提交并推送
-            git commit -m "🤖 自动更新FOMC日历数据 [$(date +'%Y-%m-%d %H:%M UTC')] - 仅当前及未来年份"
+            # 提交并推送（使用北京时间时间戳）
+            BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
+            git commit -m "🤖 自动更新FOMC日历数据 [${BEIJING_TIME} 北京时间] - 仅当前及未来年份"
             git push
             echo "✅ 数据更新已提交并推送！"
           fi
