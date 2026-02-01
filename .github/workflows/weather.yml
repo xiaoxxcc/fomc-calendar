@@ -1,17 +1,19 @@
 name: Auto Update Weather Data
+# 触发条件配置
 on:
-  # 核心修复1：合并为唯一的push触发规则，删除多余的push节点
+  # 仅当「修改自身配置文件（weather.yml）」并推送到main分支时，才触发push
   push:
     branches: [ main ]
     paths:
-      - '.github/workflows/weather.yml' # 仅修改自身文件时触发，彻底隔离FOMC工作流
+      - '.github/workflows/weather.yml'  # 仅匹配自身配置文件的变更
+  # 保留原有的天气定时触发规则（比如你之前的8 * * * *）
   schedule:
-    # 你的定时规则：UTC每小时6分 → 北京时间每小时6分（保留不变）
-    - cron: '6 * * * *'
-  workflow_dispatch: # 保留手动触发
+    - cron: '8 * * * *'  # 你的天气定时cron
+  # 保留手动触发（可选）
+  workflow_dispatch:
 
 permissions:
-  contents: write # 允许提交文件
+  contents: write # 允许工作流向仓库提交文件
 
 jobs:
   update-weather-data:
@@ -20,16 +22,15 @@ jobs:
       - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 核心修复2：拉取完整Git历史，解决推送冲突
-          ref: main       # 明确拉取main分支，避免分支错乱
+          fetch-depth: 1
 
       - name: 2. 设置Python环境并安装依赖
         run: |
-          # 核心修复3：统一用python3/pip3，适配Ubuntu的Python2/3分离环境
-          python3 -m pip install --upgrade pip
-          pip3 install requests
+          python -m pip install --upgrade pip
+          pip install requests
 
       - name: 3. 执行天气数据抓取脚本
+        # 【新增】传递仓库Secrets中的API密钥到环境变量
         env:
           WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
         run: |
@@ -37,9 +38,11 @@ jobs:
           import requests
           import json
           import csv
-          import os
+          import os  # 【新增】导入os模块，用于读取环境变量
           from datetime import datetime, timezone, timedelta
           
+          # 配置API地址 - 腾讯地图天气API
+          # 【修改】从环境变量获取密钥，替换硬编码的key
           API_KEY = os.getenv('WEATHER_API_KEY')
           API_URL = f"https://apis.map.qq.com/ws/weather/v1/?key={API_KEY}&location=30.5703266,104.271059&type=hours"
           HEADERS = {
@@ -49,98 +52,143 @@ jobs:
           }
           
           def get_beijing_time():
+              """获取当前北京时间 (UTC+8)"""
               utc_now = datetime.now(timezone.utc)
               beijing_tz = timezone(timedelta(hours=8))
               beijing_now = utc_now.astimezone(beijing_tz)
               return beijing_now
           
           def fetch_weather_data():
+              """从腾讯地图API获取天气数据"""
               print(f"📡 正在访问腾讯地图天气API: {API_URL}")
               try:
                   resp = requests.get(API_URL, headers=HEADERS, timeout=30)
                   resp.raise_for_status()
                   data = resp.json()
+                  
+                  # 检查API返回状态
                   if data.get('status') != 0:
                       print(f"❌ API返回错误: {data.get('message', 'Unknown error')}")
                       return None
+                  
                   return data
               except Exception as e:
                   print(f"❌ 网络请求失败: {e}")
                   return None
           
           def parse_hourly_forecast(weather_data):
+              """解析小时预报数据，提取第3-10个数据（索引2-9）"""
               if not weather_data:
                   print("❌ 未获取到有效数据")
                   return []
+              
+              # 提取forecast_hours数据
               forecast_hours = weather_data.get('result', {}).get('forecast_hours', [])
               if not forecast_hours:
                   print("❌ 未找到小时预报数据")
                   return []
+              
+              # 获取第一个地区的infos数组
               first_area = forecast_hours[0]
               infos = first_area.get('infos', [])
               update_time = first_area.get('update_time', '未知时间')
+              
               print(f"✅ 找到 {len(infos)} 小时预报数据，更新时间: {update_time}")
+              
+              # 提取第3-10个数据（索引2到9，共8条数据）
               hourly_data = []
-              for i in range(2, 10):
+              for i in range(2, 10):  # 获取索引2到9的数据
                   if i < len(infos):
                       info_item = infos[i]
                       hour_str = info_item.get('hour', '')
                       temperature = info_item.get('info', {}).get('temperature', 'N/A')
+                      
+                      # 提取时间部分（从"2026-02-01 16:00:00"中提取"16:00"）
                       if hour_str and len(hour_str) >= 16:
-                          time_part = hour_str[11:16]
+                          # 格式化为"HH:MM"
+                          time_part = hour_str[11:16]  # 取"16:00"
                       else:
-                          time_part = f"{(i+14) % 24:02d}:00"
-                      hourly_data.append({'time': time_part, 'temperature': temperature})
+                          time_part = f"{(i+14) % 24:02d}:00"  # 调整默认格式
+                      
+                      hourly_data.append({
+                          'time': time_part,
+                          'temperature': temperature
+                      })
                   else:
                       print(f"⚠️  未找到索引 {i} 的数据，infos长度不足")
+              
               return hourly_data
           
           def save_to_csv(hourly_data, beijing_time):
+              """将数据保存为CSV文件，覆盖写入"""
               filename = 'weather_forecast.csv'
+              
               if not hourly_data:
                   print("⚠️  未获取到数据，将创建空文件")
+                  # 创建空CSV文件
                   with open(filename, 'w', encoding='utf-8', newline='') as f:
                       writer = csv.writer(f)
                       writer.writerow(['时间', '温度(℃)', '抓取时间'])
                   print(f"📄 已创建空文件: {filename}")
                   return False
+              
+              # 覆盖写入CSV文件
               with open(filename, 'w', encoding='utf-8', newline='') as f:
                   writer = csv.writer(f)
                   writer.writerow(['时间', '温度(℃)', '抓取时间'])
+                  
+                  # 写入数据行
                   capture_time = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
                   for data in hourly_data:
-                      writer.writerow([data['time'], data['temperature'], capture_time])
+                      writer.writerow([
+                          data['time'],
+                          data['temperature'],
+                          capture_time
+                      ])
+              
               print(f"💾 数据已保存到: {filename}")
               print(f"📊 共写入 {len(hourly_data)} 条小时预报数据")
+              
+              # 显示文件内容预览
               print("📋 文件内容预览:")
               print("  " + ", ".join(['时间', '温度(℃)', '抓取时间']))
               with open(filename, 'r', encoding='utf-8') as f:
                   lines = f.readlines()
-                  for i, line in enumerate(lines[:6]):
+                  for i, line in enumerate(lines[:6]):  # 显示前6行（包括表头）
                       if i == 0:
-                          continue
+                          continue  # 跳过表头行，上面已显示
                       print(f"  {line.strip()}")
                   if len(lines) > 6:
                       print(f"  ... 还有 {len(lines)-6} 行数据")
+              
               return True
           
           def main():
+              """主函数"""
               print("=" * 60)
               print("🌤️  腾讯地图天气数据自动抓取任务开始")
               beijing_time = get_beijing_time()
               print(f"📅 当前北京时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
               print("📋 提取第3-10个数据（索引2-9）")
               print("=" * 60)
+              
+              # 获取天气数据
               weather_data = fetch_weather_data()
               if not weather_data:
                   print("❌ 获取天气数据失败，退出任务")
                   return
+              
+              # 解析小时预报数据
               hourly_data = parse_hourly_forecast(weather_data)
+              
               if hourly_data:
                   print("📋 解析到的数据（索引2-9）:")
                   for i, data in enumerate(hourly_data, 1):
                       print(f"  第{i:2d}条: {data['time']}: {data['temperature']}℃")
+              
+              # 保存为CSV（覆盖写入）
               success = save_to_csv(hourly_data, beijing_time)
+              
               print("=" * 60)
               if success:
                   print("✅ 任务完成！")
@@ -176,11 +224,7 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           
-          # 先暂存文件，再拉取远程最新代码（双重保障，彻底避免推送冲突）
-          git add weather_forecast.csv 2>/dev/null || echo "注意：未找到CSV文件"
-          git pull origin main --rebase
-          
-          # 再次确认暂存（避免拉取过程中文件状态被覆盖）
+          # 添加生成的CSV文件
           git add weather_forecast.csv 2>/dev/null || echo "注意：未找到CSV文件"
           
           # 检查是否有文件变更
