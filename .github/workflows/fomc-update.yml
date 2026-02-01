@@ -1,5 +1,9 @@
 name: Auto Update FOMC Calendar
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/fomc-update.yml' 
   schedule:
     # 每周一中午12点（UTC时间）运行一次，对应北京时间周一晚8点
     - cron: '0 12 * * 1'
