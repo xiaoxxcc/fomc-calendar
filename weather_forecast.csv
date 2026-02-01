@@ -1,25 +1,9 @@
-update_time,forecast_time,temperature,data_source
-2026-02-01 16:49:07,00:00,12°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,01:00,01°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,02:00,02°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,03:00,03°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,04:00,04°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,05:00,05°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,06:00,06°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,07:00,07°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,08:00,08°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,09:00,09°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,10:00,10°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,11:00,11°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,12:00,13°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,13:00,14°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,14:00,15°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,15:00,16°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,16:00,17°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,17:00,18°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,18:00,19°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,19:00,20°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,20:00,21°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,21:00,22°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,22:00,23°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
-2026-02-01 16:49:07,23:00,24°C,https://tianqi.moji.com/weather/china/sichuan/longquanyi-district
+时间,温度(℃),抓取时间
+17:00,13,2026-02-01 17:00:56
+18:00,12,2026-02-01 17:00:56
+19:00,11,2026-02-01 17:00:56
+20:00,10,2026-02-01 17:00:56
+21:00,9,2026-02-01 17:00:56
+22:00,8,2026-02-01 17:00:56
+23:00,7,2026-02-01 17:00:56
+00:00,6,2026-02-01 17:00:56
