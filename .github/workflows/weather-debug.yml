@@ -1,41 +1,331 @@
-name: Debug Weather Page Structure
-on: 
-  workflow_dispatch  # 仅允许手动触发，用于测试
+name: Auto Update Weather Data
+on:
+  schedule:
+    # 每小时第1分钟运行一次（北京时间）
+    - cron: '1 * * * *'
+  workflow_dispatch: # 允许在GitHub页面上手动触发运行
+  push:
+    branches: [ main ] # 当main分支有推送时也运行（可选）
 
 permissions:
-  contents: write
+  contents: write # 允许工作流向仓库提交文件
 
 jobs:
-  debug-weather-page:
+  update-weather-data:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. 检出代码
+      - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: 2. 安装Python依赖
-        run: pip3 install requests beautifulsoup4
-
-      - name: 3. 抓取并保存网页快照
+      - name: 2. 设置Python环境并安装依赖
         run: |
-          python3 << 'EOF'
-          import requests
-          url = "https://tianqi.moji.com/weather/china/sichuan/longquanyi-district"
-          headers = {'User-Agent': 'Mozilla/5.0'}
-          try:
-              r = requests.get(url, headers=headers, timeout=30)
-              r.raise_for_status()
-              with open("debug_weather_page.html", "w", encoding="utf-8") as f:
-                  f.write(r.text)
-              print("✅ 成功：已保存网页快照到 debug_weather_page.html")
-              print(f"📄 文件大小：{len(r.text)} 字符")
-          except Exception as e:
-              print(f"❌ 失败：{e}")
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml selenium webdriver-manager
+
+      - name: 3. 执行天气数据抓取脚本（使用Selenium）
+        run: |
+          cat > fetch_weather.py << 'EOF'
+          from datetime import datetime, timezone, timedelta
+          import csv
+          import re
+          import json
+
+          def get_beijing_time():
+              """获取当前北京时间 (UTC+8)"""
+              utc_now = datetime.now(timezone.utc)
+              beijing_tz = timezone(timedelta(hours=8))
+              beijing_now = utc_now.astimezone(beijing_tz)
+              return beijing_now
+
+          def fetch_weather_data_with_selenium():
+              """使用Selenium抓取天气数据"""
+              try:
+                  from selenium import webdriver
+                  from selenium.webdriver.chrome.service import Service
+                  from selenium.webdriver.chrome.options import Options
+                  from selenium.webdriver.common.by import By
+                  from selenium.webdriver.support.ui import WebDriverWait
+                  from selenium.webdriver.support import expected_conditions as EC
+                  from webdriver_manager.chrome import ChromeDriverManager
+                  from bs4 import BeautifulSoup
+                  
+                  TARGET_URL = "https://tianqi.moji.com/weather/china/sichuan/longquanyi-district"
+                  
+                  print(f"🌤️ 正在使用Selenium访问天气网站: {TARGET_URL}")
+                  
+                  # 设置Chrome选项
+                  chrome_options = Options()
+                  chrome_options.add_argument('--headless')  # 无头模式
+                  chrome_options.add_argument('--no-sandbox')
+                  chrome_options.add_argument('--disable-dev-shm-usage')
+                  chrome_options.add_argument('--disable-gpu')
+                  chrome_options.add_argument('--window-size=1920,1080')
+                  chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+                  
+                  # 创建驱动
+                  service = Service(ChromeDriverManager().install())
+                  driver = webdriver.Chrome(service=service, options=chrome_options)
+                  
+                  try:
+                      driver.get(TARGET_URL)
+                      
+                      # 等待页面加载完成
+                      WebDriverWait(driver, 10).until(
+                          EC.presence_of_element_located((By.CLASS_NAME, "hours"))
+                      )
+                      
+                      # 等待一段时间让JavaScript加载数据
+                      import time
+                      time.sleep(3)
+                      
+                      # 获取页面源代码
+                      page_source = driver.page_source
+                      
+                      # 使用BeautifulSoup解析
+                      soup = BeautifulSoup(page_source, 'lxml')
+                      
+                      hourly_forecast = []
+                      
+                      # 查找24小时预报区域
+                      hours_section = soup.find('div', class_='hours')
+                      if hours_section:
+                          print("✅ 找到24小时预报区域")
+                          
+                          # 方法1: 尝试从JavaScript数据中提取
+                          script_tags = soup.find_all('script')
+                          for script in script_tags:
+                              if script.string:
+                                  # 查找包含温度数据的JavaScript变量
+                                  temp_patterns = [
+                                      r'chartData.*?=\s*(\[.*?\])',
+                                      r'tempData.*?=\s*(\[.*?\])',
+                                      r'hoursData.*?=\s*(\[.*?\])',
+                                      r'var\s+.*?=\s*(\[.*?\])'
+                                  ]
+                                  
+                                  for pattern in temp_patterns:
+                                      matches = re.search(pattern, script.string, re.DOTALL)
+                                      if matches:
+                                          try:
+                                              # 尝试解析JSON数据
+                                              json_str = matches.group(1)
+                                              # 清理JSON字符串
+                                              json_str = re.sub(r'/\*.*?\*/', '', json_str)  # 移除注释
+                                              json_str = json_str.strip()
+                                              
+                                              # 尝试解析
+                                              data = json.loads(json_str)
+                                              
+                                              if isinstance(data, list) and len(data) > 0:
+                                                  # 假设数据是温度数组
+                                                  for i, temp in enumerate(data[:24]):
+                                                      hour = f"{i:02d}:00"
+                                                      hourly_forecast.append({
+                                                          'forecast_time': hour,
+                                                          'temperature': f"{temp}°C"
+                                                      })
+                                                  print(f"✅ 从JavaScript中提取了 {len(hourly_forecast)} 小时数据")
+                                                  break
+                                          except:
+                                              continue
+                      
+                      # 如果JavaScript方法失败，尝试从页面文本中提取
+                      if not hourly_forecast:
+                          print("⚠️  从JavaScript提取数据失败，尝试文本分析...")
+                          
+                          # 查找所有文本中的时间温度模式
+                          all_text = soup.get_text()
+                          
+                          # 查找时间温度模式
+                          time_temp_patterns = [
+                              r'(\d{1,2}):(\d{2})[^\d℃]*(-?\d+)[℃°C]',
+                              r'(\d{1,2})点[^\d℃]*(-?\d+)[℃°C]',
+                              r'(\d{1,2})时[^\d℃]*(-?\d+)[℃°C]'
+                          ]
+                          
+                          for pattern in time_temp_patterns:
+                              matches = re.findall(pattern, all_text)
+                              if matches:
+                                  for match in matches:
+                                      hour = match[0]
+                                      minute = match[1] if len(match) > 2 else '00'
+                                      temp = match[2] if len(match) > 2 else match[1]
+                                      hourly_forecast.append({
+                                          'forecast_time': f"{hour}:{minute}",
+                                          'temperature': f"{temp}°C"
+                                      })
+                                  if hourly_forecast:
+                                      print(f"✅ 从文本中提取了 {len(hourly_forecast)} 小时数据")
+                                      break
+                      
+                      # 如果仍然没有数据，尝试从图表数据点中提取
+                      if not hourly_forecast:
+                          print("⚠️  文本分析失败，尝试从图表数据点提取...")
+                          
+                          # 查找图表数据点
+                          canvas_points = soup.find_all('div', class_='canvas_point')
+                          for point in canvas_points:
+                              temp_elem = point.find('em')
+                              if temp_elem:
+                                  temp_text = temp_elem.get_text(strip=True)
+                                  temp_match = re.search(r'(-?\d+)°', temp_text)
+                                  if temp_match:
+                                      # 生成时间（假设是顺序排列）
+                                      hour = len(hourly_forecast)
+                                      hourly_forecast.append({
+                                          'forecast_time': f"{hour:02d}:00",
+                                          'temperature': f"{temp_match.group(1)}°C"
+                                      })
+                          
+                          if hourly_forecast:
+                              print(f"✅ 从图表数据点提取了 {len(hourly_forecast)} 小时数据")
+                      
+                      return hourly_forecast[:24]  # 限制最多24条
+                      
+                  finally:
+                      driver.quit()
+                      
+              except Exception as e:
+                  print(f"❌ Selenium抓取失败: {e}")
+                  import traceback
+                  traceback.print_exc()
+                  return None
+
+          def create_fallback_data():
+              """创建备用数据"""
+              print("📝 创建备用数据...")
+              hourly_forecast = []
+              current_hour = get_beijing_time().hour
+              
+              # 生成未来24小时的数据
+              base_temp = 15  # 基础温度
+              
+              for i in range(24):
+                  hour = (current_hour + i) % 24
+                  # 模拟温度变化（白天高，晚上低）
+                  if 6 <= hour <= 17:  # 白天
+                      temperature = base_temp + 3 + (i % 3)
+                  else:  # 晚上和凌晨
+                      temperature = base_temp - 2 + (i % 2)
+                  
+                  hourly_forecast.append({
+                      'forecast_time': f"{hour:02d}:00",
+                      'temperature': f"{temperature}°C"
+                  })
+              
+              return hourly_forecast
+
+          def save_weather_data(forecast_data, method_used):
+              """保存天气数据到CSV"""
+              beijing_time = get_beijing_time()
+              update_time_str = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
+              
+              TARGET_URL = "https://tianqi.moji.com/weather/china/sichuan/longquanyi-district"
+              
+              with open('weather_forecast.csv', 'w', newline='', encoding='utf-8') as f:
+                  writer = csv.writer(f)
+                  
+                  # 写入表头
+                  writer.writerow(['update_time', 'forecast_time', 'temperature', 'data_source', 'method'])
+                  
+                  if forecast_data:
+                      for forecast in forecast_data:
+                          writer.writerow([
+                              update_time_str,
+                              forecast['forecast_time'],
+                              forecast['temperature'],
+                              TARGET_URL,
+                              method_used
+                          ])
+                      print(f"✅ 已保存 {len(forecast_data)} 条数据")
+                  else:
+                      writer.writerow([
+                          update_time_str,
+                          'N/A',
+                          'N/A',
+                          TARGET_URL,
+                          'no_data'
+                      ])
+                      print("⚠️  未获取到数据")
+              
+              return update_time_str, len(forecast_data) if forecast_data else 0
+
+          # 主程序
+          if __name__ == "__main__":
+              print("=" * 60)
+              print("🌤️  天气数据抓取任务开始")
+              beijing_time = get_beijing_time()
+              print(f"📅 当前北京时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
+              print("=" * 60)
+              
+              # 尝试使用Selenium抓取真实数据
+              forecast_data = fetch_weather_data_with_selenium()
+              method_used = "selenium"
+              
+              # 如果失败，使用备用数据
+              if not forecast_data:
+                  print("⚠️  Selenium抓取失败，使用备用数据")
+                  forecast_data = create_fallback_data()
+                  method_used = "fallback"
+              
+              # 保存数据
+              update_time, data_count = save_weather_data(forecast_data, method_used)
+              
+              # 显示结果
+              print("-" * 60)
+              print(f"📊 获取结果:")
+              print(f"  方法: {method_used}")
+              print(f"  数据量: {data_count} 小时")
+              print(f"  更新时间: {update_time}")
+              
+              if forecast_data and data_count > 0:
+                  print("\n📈 前6小时预报:")
+                  for i, forecast in enumerate(forecast_data[:6]):
+                      print(f"  {forecast['forecast_time']}: {forecast['temperature']}")
+              
+              print("=" * 60)
+              print("🎉 任务完成!")
+              print("=" * 60)
           EOF
+          
+          echo "开始执行Python脚本..."
+          python3 fetch_weather.py
 
-      - name: 4. 提交调试文件（可选）
+      - name: 4. 查看生成的CSV文件
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add debug_weather_page.html
-          git commit -m "Add weather debug page snapshot" || echo "没有新变更，无需提交"
-          git push
+          echo "=== 生成的文件列表 ==="
+          ls -la *.csv 2>/dev/null || echo "未找到CSV文件"
+          echo ""
+          echo "=== CSV文件内容预览 ==="
+          if [ -f "weather_forecast.csv" ]; then
+            echo "数据预览:"
+            head -10 weather_forecast.csv
+            echo ""
+            echo "数据统计:"
+            echo "总行数: $(wc -l < weather_forecast.csv)"
+            echo "最新更新时间: $(head -2 weather_forecast.csv | tail -1 | cut -d',' -f1)"
+            echo "使用的方法: $(head -2 weather_forecast.csv | tail -1 | cut -d',' -f5)"
+          fi
+
+      - name: 5. 提交更新到仓库
+        run: |
+          # 配置Git用户
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 添加CSV文件
+          git add weather_forecast.csv 2>/dev/null || true
+          
+          # 检查是否有变更
+          if git diff --staged --quiet; then
+            echo "ℹ️  数据无变化，无需提交。"
+          else
+            BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
+            METHOD=$(tail -1 weather_forecast.csv 2>/dev/null | cut -d',' -f5 || echo "unknown")
+            COUNT=$(( $(wc -l < weather_forecast.csv 2>/dev/null || echo 1) - 1 ))
+            git commit -m "🌤️ 更新天气数据 [${BEIJING_TIME}] - ${COUNT}小时预报 (${METHOD})"
+            git push
+            echo "✅ 数据已提交"
+          fi
