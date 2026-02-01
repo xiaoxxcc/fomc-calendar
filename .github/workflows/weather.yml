@@ -31,10 +31,9 @@ jobs:
           import json
           import csv
           from datetime import datetime, timezone, timedelta
-          import os
           
-          # 配置API地址
-          API_URL = "https://api.shwgij.com/api/tianqi/tianqi?key=CJ1owkCTEsqeI20HPZ3vxEHF3H&m=2&province=四川&city=成都&county=龙泉驿区"
+          # 配置API地址 - 腾讯地图天气API
+          API_URL = "https://apis.map.qq.com/ws/weather/v1/?key=LUHBZ-WWFE7-7IPXV-PMD3I-2JAS6-T4F6Q&location=30.5703266,104.271059&type=hours"
           HEADERS = {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
               'Accept': 'application/json',
@@ -49,54 +48,63 @@ jobs:
               return beijing_now
           
           def fetch_weather_data():
-              """从API获取天气数据"""
-              print(f"📡 正在访问天气API: {API_URL}")
+              """从腾讯地图API获取天气数据"""
+              print(f"📡 正在访问腾讯地图天气API: {API_URL}")
               try:
                   resp = requests.get(API_URL, headers=HEADERS, timeout=30)
                   resp.raise_for_status()
-                  return resp.json()
+                  data = resp.json()
+                  
+                  # 检查API返回状态
+                  if data.get('status') != 0:
+                      print(f"❌ API返回错误: {data.get('message', 'Unknown error')}")
+                      return None
+                  
+                  return data
               except Exception as e:
                   print(f"❌ 网络请求失败: {e}")
                   return None
           
           def parse_hourly_forecast(weather_data):
-              """解析24小时预报数据，提取1-8小时的温度和对应时间"""
-              if not weather_data or 'data' not in weather_data:
-                  print("❌ 未找到有效数据")
+              """解析小时预报数据，提取第3-10个数据（索引2-9）"""
+              if not weather_data:
+                  print("❌ 未获取到有效数据")
                   return []
               
-              # 获取forecast_1h数据
-              forecast_1h = weather_data['data'].get('forecast_1h', {})
-              if not forecast_1h:
-                  print("❌ 未找到24小时预报数据")
+              # 提取forecast_hours数据
+              forecast_hours = weather_data.get('result', {}).get('forecast_hours', [])
+              if not forecast_hours:
+                  print("❌ 未找到小时预报数据")
                   return []
               
-              print(f"✅ 找到 {len(forecast_1h)} 小时预报数据")
+              # 获取第一个地区的infos数组
+              first_area = forecast_hours[0]
+              infos = first_area.get('infos', [])
+              update_time = first_area.get('update_time', '未知时间')
               
-              # 提取1-8小时的数据（对应索引1-8）
+              print(f"✅ 找到 {len(infos)} 小时预报数据，更新时间: {update_time}")
+              
+              # 提取第3-10个数据（索引2到9，共8条数据）
               hourly_data = []
-              for i in range(1, 9):  # 获取第1到第8小时
-                  hour_key = str(i)
-                  if hour_key in forecast_1h:
-                      hour_data = forecast_1h[hour_key]
+              for i in range(2, 10):  # 获取索引2到9的数据
+                  if i < len(infos):
+                      info_item = infos[i]
+                      hour_str = info_item.get('hour', '')
+                      temperature = info_item.get('info', {}).get('temperature', 'N/A')
                       
-                      # 提取时间（从update_time中提取HH:MM）
-                      update_time = hour_data.get('update_time', '')
-                      if update_time and len(update_time) >= 10:
-                          # update_time格式: YYYYMMDDHHMMSS
-                          hour_str = update_time[8:10] + ":00"
+                      # 提取时间部分（从"2026-02-01 16:00:00"中提取"16:00"）
+                      if hour_str and len(hour_str) >= 16:
+                          # 格式化为"HH:MM"
+                          time_part = hour_str[11:16]  # 取"16:00"
                       else:
-                          hour_str = f"{i:02d}:00"  # 如果无法解析，使用默认格式
-                      
-                      # 提取温度
-                      temperature = hour_data.get('degree', 'N/A')
+                          time_part = f"{(i+14) % 24:02d}:00"  # 调整默认格式
                       
                       hourly_data.append({
-                          'time': hour_str,
+                          'time': time_part,
                           'temperature': temperature
                       })
                   else:
-                      print(f"⚠️  未找到第 {i} 小时的数据")
+                      print(f"⚠️  未找到索引 {i} 的数据，infos长度不足")
               
               return hourly_data
           
@@ -147,9 +155,10 @@ jobs:
           def main():
               """主函数"""
               print("=" * 60)
-              print("🌤️  天气数据自动抓取任务开始")
+              print("🌤️  腾讯地图天气数据自动抓取任务开始")
               beijing_time = get_beijing_time()
               print(f"📅 当前北京时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
+              print("📋 提取第3-10个数据（索引2-9）")
               print("=" * 60)
               
               # 获取天气数据
@@ -162,9 +171,9 @@ jobs:
               hourly_data = parse_hourly_forecast(weather_data)
               
               if hourly_data:
-                  print("📋 解析到的小时预报数据:")
+                  print("📋 解析到的数据（索引2-9）:")
                   for i, data in enumerate(hourly_data, 1):
-                      print(f"  {i:2d}. {data['time']}: {data['temperature']}℃")
+                      print(f"  第{i:2d}条: {data['time']}: {data['temperature']}℃")
               
               # 保存为CSV（覆盖写入）
               success = save_to_csv(hourly_data, beijing_time)
