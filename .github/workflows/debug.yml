@@ -1,4 +1,4 @@
-name: Debug FOMC Page Structure
+name: Debug Weather Page Structure
 on: 
   workflow_dispatch  # 仅允许手动触发，用于测试
 
@@ -6,7 +6,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  debug-weather-page:
     runs-on: ubuntu-latest
     steps:
       - name: 1. 检出代码
@@ -19,14 +19,15 @@ jobs:
         run: |
           python3 << 'EOF'
           import requests
-          url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+          url = "https://tianqi.moji.com/weather/china/sichuan/longquanyi-district"
           headers = {'User-Agent': 'Mozilla/5.0'}
           try:
               r = requests.get(url, headers=headers, timeout=30)
               r.raise_for_status()
-              with open("debug_fomc_page.html", "w", encoding="utf-8") as f:
+              with open("debug_weather_page.html", "w", encoding="utf-8") as f:
                   f.write(r.text)
-              print("✅ 成功：已保存网页快照到 debug_fomc_page.html")
+              print("✅ 成功：已保存网页快照到 debug_weather_page.html")
+              print(f"📄 文件大小：{len(r.text)} 字符")
           except Exception as e:
               print(f"❌ 失败：{e}")
           EOF
@@ -35,6 +36,6 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add debug_fomc_page.html
-          git commit -m "Add debug page snapshot" || echo "没有新变更，无需提交"
+          git add debug_weather_page.html
+          git commit -m "Add weather debug page snapshot" || echo "没有新变更，无需提交"
           git push
