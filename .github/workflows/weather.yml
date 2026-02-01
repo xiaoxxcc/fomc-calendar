@@ -2,7 +2,7 @@ name: Auto Update Weather Data
 on:
   schedule:
     # 每小时第1分钟运行一次（北京时间每小时第1分钟）
-    - cron: '57,2,12 * * * *'
+    - cron: '6 * * * *'
   workflow_dispatch: # 允许在GitHub页面上手动触发运行
   push:
     branches: [ main ] # 当main分支有推送时也运行（可选）
