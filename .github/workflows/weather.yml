@@ -1,5 +1,9 @@
 name: Auto Update Weather Data
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/weather.yml' 
   schedule:
     # 每小时第1分钟运行一次（北京时间每小时第1分钟）
     - cron: '6 * * * *'
