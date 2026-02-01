@@ -8,7 +8,7 @@ on:
       - '.github/workflows/fomc-update.yml'  # 仅匹配自身配置文件的变更
   # 保留原有的定时触发规则（替换为你的FOMC定时cron）
   schedule:
-    - cron: '原有的FOMC定时cron表达式'  # 比如你之前的FOMC定时规则
+    - cron: '0 12 * * 1'  # 比如你之前的FOMC定时规则
   # 保留手动触发（可选）
   workflow_dispatch:
 
