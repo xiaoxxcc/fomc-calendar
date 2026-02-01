@@ -2,7 +2,7 @@ name: Auto Update Weather Data
 on:
   schedule:
     # 每小时第1分钟运行一次（北京时间每小时第1分钟）
-    - cron: '1 * * * *'
+    - cron: '0,30 * * * *'
   workflow_dispatch: # 允许在GitHub页面上手动触发运行
   push:
     branches: [ main ] # 当main分支有推送时也运行（可选）
@@ -25,15 +25,21 @@ jobs:
           pip install requests
 
       - name: 3. 执行天气数据抓取脚本
+        # 【新增】传递仓库Secrets中的API密钥到环境变量
+        env:
+          WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
         run: |
           cat > fetch_weather.py << 'EOF'
           import requests
           import json
           import csv
+          import os  # 【新增】导入os模块，用于读取环境变量
           from datetime import datetime, timezone, timedelta
           
           # 配置API地址 - 腾讯地图天气API
-          API_URL = "https://apis.map.qq.com/ws/weather/v1/?key=LUHBZ-WWFE7-7IPXV-PMD3I-2JAS6-T4F6Q&location=30.5703266,104.271059&type=hours"
+          # 【修改】从环境变量获取密钥，替换硬编码的key
+          API_KEY = os.getenv('WEATHER_API_KEY')
+          API_URL = f"https://apis.map.qq.com/ws/weather/v1/?key={API_KEY}&location=30.5703266,104.271059&type=hours"
           HEADERS = {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
               'Accept': 'application/json',
