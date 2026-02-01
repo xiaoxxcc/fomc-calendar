@@ -319,24 +319,27 @@ jobs:
           fi
 
       - name: 5. 提交更新到仓库
-        run: |
-          # 配置Git用户
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          
-          # 拉取远程最新代码（双重保障，避免推送冲突）
-          git pull origin main --rebase
-          
-          # 添加生成的数据文件
-          git add fomc_calendar.json fomc_calendar.csv fomc_dates.txt 2>/dev/null || echo "注意：未找到数据文件"
-          
-          # 检查是否有文件变更
-          if git diff --staged --quiet; then
-            echo "ℹ️  数据无变化，无需提交。"
-          else
-            # 提交并推送（使用北京时间时间戳）
-            BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
-            git commit -m "🤖 自动更新FOMC日历数据 [${BEIJING_TIME} 北京时间] - 仅当前及未来年份"
-            git push
-            echo "✅ 数据更新已提交并推送！"
-          fi
+  run: |
+    # 配置Git用户
+    git config --local user.email "github-actions[bot]@users.noreply.github.com"
+    git config --local user.name "github-actions[bot]"
+    
+    # 先暂存所有生成的文件（解决未暂存变更的问题）
+    git add fomc_calendar.json fomc_calendar.csv fomc_dates.txt 2>/dev/null || echo "注意：未找到数据文件"
+    
+    # 拉取远程最新代码（先暂存后拉取，避免冲突）
+    git pull origin main --rebase
+    
+    # 再次检查暂存区（确保文件已被跟踪）
+    git add fomc_calendar.json fomc_calendar.csv fomc_dates.txt 2>/dev/null || echo "注意：未找到数据文件"
+    
+    # 检查是否有文件变更
+    if git diff --staged --quiet; then
+      echo "ℹ️  数据无变化，无需提交。"
+    else
+      # 提交并推送（使用北京时间时间戳）
+      BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
+      git commit -m "🤖 自动更新FOMC日历数据 [${BEIJING_TIME} 北京时间] - 仅当前及未来年份"
+      git push
+      echo "✅ 数据更新已提交并推送！"
+    fi
