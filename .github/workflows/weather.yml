@@ -8,7 +8,7 @@ on:
       - '.github/workflows/weather.yml'  # 仅匹配自身配置文件的变更
   # 保留原有的天气定时触发规则（比如你之前的8 * * * *）
   schedule:
-    - cron: '6 * * * *'  # 你的天气定时cron
+    - cron: '0 15 * * *'  # 你的天气定时cron
   # 保留手动触发（可选）
   workflow_dispatch:
 
