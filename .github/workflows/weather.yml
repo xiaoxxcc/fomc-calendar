@@ -77,7 +77,7 @@ jobs:
                   return None
           
           def parse_hourly_forecast(weather_data):
-              """解析小时预报数据，提取第3-10个数据（索引2-9）"""
+              """解析小时预报数据，提取第3-28个数据（索引2-27）"""
               if not weather_data:
                   print("❌ 未获取到有效数据")
                   return []
@@ -95,9 +95,9 @@ jobs:
               
               print(f"✅ 找到 {len(infos)} 小时预报数据，更新时间: {update_time}")
               
-              # 提取第3-10个数据（索引2到9，共8条数据）
+              # 【修改】提取第3-28个数据（索引2到27，共26条数据）
               hourly_data = []
-              for i in range(2, 10):  # 获取索引2到9的数据
+              for i in range(2, 28):  # 获取索引2到27的数据（共26条）
                   if i < len(infos):
                       info_item = infos[i]
                       hour_str = info_item.get('hour', '')
@@ -154,12 +154,13 @@ jobs:
               print("  " + ", ".join(['时间', '温度(℃)', '抓取时间']))
               with open(filename, 'r', encoding='utf-8') as f:
                   lines = f.readlines()
-                  for i, line in enumerate(lines[:6]):  # 显示前6行（包括表头）
+                  # 【修改】显示前10行数据（包括表头）
+                  for i, line in enumerate(lines[:11]):  # 显示前11行（包括表头）
                       if i == 0:
                           continue  # 跳过表头行，上面已显示
                       print(f"  {line.strip()}")
-                  if len(lines) > 6:
-                      print(f"  ... 还有 {len(lines)-6} 行数据")
+                  if len(lines) > 11:
+                      print(f"  ... 还有 {len(lines)-11} 行数据")
               
               return True
           
@@ -169,7 +170,8 @@ jobs:
               print("🌤️  腾讯地图天气数据自动抓取任务开始")
               beijing_time = get_beijing_time()
               print(f"📅 当前北京时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
-              print("📋 提取第3-10个数据（索引2-9）")
+              # 【修改】更新说明文字
+              print("📋 提取第3-28个数据（索引2-27，共26条）")
               print("=" * 60)
               
               # 获取天气数据
@@ -182,9 +184,19 @@ jobs:
               hourly_data = parse_hourly_forecast(weather_data)
               
               if hourly_data:
-                  print("📋 解析到的数据（索引2-9）:")
-                  for i, data in enumerate(hourly_data, 1):
-                      print(f"  第{i:2d}条: {data['time']}: {data['temperature']}℃")
+                  print(f"📋 解析到的数据（索引2-27，共{len(hourly_data)}条）:")
+                  # 【修改】显示前5条和后5条数据，避免输出太多
+                  if len(hourly_data) > 10:
+                      for i in range(5):
+                          data = hourly_data[i]
+                          print(f"  第{i+1:2d}条: {data['time']}: {data['temperature']}℃")
+                      print(f"  ... (中间省略 {len(hourly_data)-10} 条数据)")
+                      for i in range(len(hourly_data)-5, len(hourly_data)):
+                          data = hourly_data[i]
+                          print(f"  第{i+1:2d}条: {data['time']}: {data['temperature']}℃")
+                  else:
+                      for i, data in enumerate(hourly_data, 1):
+                          print(f"  第{i:2d}条: {data['time']}: {data['temperature']}℃")
               
               # 保存为CSV（覆盖写入）
               success = save_to_csv(hourly_data, beijing_time)
@@ -212,7 +224,8 @@ jobs:
           if [ -f "weather_forecast.csv" ]; then
             echo "文件大小: $(wc -l < weather_forecast.csv) 行"
             echo "----------------------------------------"
-            head -10 weather_forecast.csv | column -t -s, 2>/dev/null || head -10 weather_forecast.csv
+            # 【修改】显示更多行，因为现在有26条数据
+            head -15 weather_forecast.csv | column -t -s, 2>/dev/null || head -15 weather_forecast.csv
             echo "----------------------------------------"
           else
             echo "weather_forecast.csv 文件不存在"
