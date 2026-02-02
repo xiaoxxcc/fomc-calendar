@@ -1,19 +1,16 @@
 name: Auto Update Weather Data
 # 触发条件配置
 on:
-  # 仅当「修改自身配置文件（weather.yml）」并推送到main分支时，才触发push
   push:
     branches: [ main ]
     paths:
-      - '.github/workflows/weather.yml'  # 仅匹配自身配置文件的变更
-  # 保留原有的天气定时触发规则（比如你之前的8 * * * *）
+      - '.github/workflows/weather.yml'
   schedule:
-    - cron: '0 15 * * *'  # 你的天气定时cron
-  # 保留手动触发（可选）
+    - cron: '0 15 * * *'
   workflow_dispatch:
 
 permissions:
-  contents: write # 允许工作流向仓库提交文件
+  contents: write
 
 jobs:
   update-weather-data:
@@ -30,7 +27,6 @@ jobs:
           pip install requests
 
       - name: 3. 执行天气数据抓取脚本
-        # 【新增】传递仓库Secrets中的API密钥到环境变量
         env:
           WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
         run: |
@@ -38,11 +34,10 @@ jobs:
           import requests
           import json
           import csv
-          import os  # 【新增】导入os模块，用于读取环境变量
+          import os
           from datetime import datetime, timezone, timedelta
           
-          # 配置API地址 - 腾讯地图天气API
-          # 【修改】从环境变量获取密钥，替换硬编码的key
+          # 配置API地址
           API_KEY = os.getenv('WEATHER_API_KEY')
           API_URL = f"https://apis.map.qq.com/ws/weather/v1/?key={API_KEY}&location=30.5703266,104.271059&type=hours"
           HEADERS = {
@@ -66,7 +61,6 @@ jobs:
                   resp.raise_for_status()
                   data = resp.json()
                   
-                  # 检查API返回状态
                   if data.get('status') != 0:
                       print(f"❌ API返回错误: {data.get('message', 'Unknown error')}")
                       return None
@@ -82,40 +76,61 @@ jobs:
                   print("❌ 未获取到有效数据")
                   return []
               
-              # 提取forecast_hours数据
               forecast_hours = weather_data.get('result', {}).get('forecast_hours', [])
               if not forecast_hours:
                   print("❌ 未找到小时预报数据")
                   return []
               
-              # 获取第一个地区的infos数组
               first_area = forecast_hours[0]
               infos = first_area.get('infos', [])
               update_time = first_area.get('update_time', '未知时间')
               
-              print(f"✅ 找到 {len(infos)} 小时预报数据，更新时间: {update_time}")
+              print(f"✅ API返回了 {len(infos)} 小时预报数据，更新时间: {update_time}")
               
-              # 【修改】提取第3-28个数据（索引2到27，共26条数据）
+              # 显示API返回的所有数据的时间范围
+              if infos:
+                  first_time = infos[0].get('hour', '未知')
+                  last_time = infos[-1].get('hour', '未知')
+                  print(f"📅 数据时间范围: {first_time} 到 {last_time}")
+              
+              # 提取第3-28个数据（索引2-27）
+              start_idx = 2  # 第3个数据（索引2）
+              end_idx = 28   # 第28个数据（索引27）
+              
               hourly_data = []
-              for i in range(2, 28):  # 获取索引2到27的数据（共26条）
-                  if i < len(infos):
-                      info_item = infos[i]
-                      hour_str = info_item.get('hour', '')
-                      temperature = info_item.get('info', {}).get('temperature', 'N/A')
-                      
-                      # 提取时间部分（从"2026-02-01 16:00:00"中提取"16:00"）
-                      if hour_str and len(hour_str) >= 16:
-                          # 格式化为"HH:MM"
-                          time_part = hour_str[11:16]  # 取"16:00"
-                      else:
-                          time_part = f"{(i+14) % 24:02d}:00"  # 调整默认格式
-                      
-                      hourly_data.append({
-                          'time': time_part,
-                          'temperature': temperature
-                      })
+              
+              # 检查数据长度是否足够
+              if len(infos) < end_idx:
+                  print(f"⚠️  API只返回了{len(infos)}条数据，无法提取到第{end_idx}条")
+                  print(f"📊 将提取第{start_idx+1}条到第{len(infos)}条数据")
+                  end_idx = len(infos)
+              
+              for i in range(start_idx, end_idx):
+                  info_item = infos[i]
+                  hour_str = info_item.get('hour', '')
+                  temperature = info_item.get('info', {}).get('temperature', 'N/A')
+                  
+                  # 提取时间部分（从"2026-02-02 12:00:00"中提取"12:00"）
+                  if hour_str and len(hour_str) >= 16:
+                      # 提取"HH:MM"部分
+                      time_part = hour_str[11:16]  # 取"12:00"
                   else:
-                      print(f"⚠️  未找到索引 {i} 的数据，infos长度不足")
+                      time_part = f"{(i+14) % 24:02d}:00"  # 调整默认格式
+                  
+                  hourly_data.append({
+                      'time': time_part,
+                      'temperature': temperature
+                  })
+              
+              print(f"📊 成功提取了索引 {start_idx} 到 {end_idx-1} 的数据，共 {len(hourly_data)} 条")
+              
+              # 显示提取的数据
+              if hourly_data:
+                  print("📋 提取的数据详情:")
+                  for idx, data in enumerate(hourly_data):
+                      original_idx = start_idx + idx
+                      original_hour = infos[original_idx].get('hour', '未知时间') if original_idx < len(infos) else '未知'
+                      print(f"  索引{original_idx:2d} ({original_hour[5:16] if len(original_hour)>=16 else original_hour}): {data['time']} - {data['temperature']}℃")
               
               return hourly_data
           
@@ -125,19 +140,16 @@ jobs:
               
               if not hourly_data:
                   print("⚠️  未获取到数据，将创建空文件")
-                  # 创建空CSV文件
                   with open(filename, 'w', encoding='utf-8', newline='') as f:
                       writer = csv.writer(f)
                       writer.writerow(['时间', '温度(℃)', '抓取时间'])
                   print(f"📄 已创建空文件: {filename}")
                   return False
               
-              # 覆盖写入CSV文件
               with open(filename, 'w', encoding='utf-8', newline='') as f:
                   writer = csv.writer(f)
                   writer.writerow(['时间', '温度(℃)', '抓取时间'])
                   
-                  # 写入数据行
                   capture_time = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
                   for data in hourly_data:
                       writer.writerow([
@@ -149,15 +161,13 @@ jobs:
               print(f"💾 数据已保存到: {filename}")
               print(f"📊 共写入 {len(hourly_data)} 条小时预报数据")
               
-              # 显示文件内容预览
               print("📋 文件内容预览:")
               print("  " + ", ".join(['时间', '温度(℃)', '抓取时间']))
               with open(filename, 'r', encoding='utf-8') as f:
                   lines = f.readlines()
-                  # 【修改】显示前10行数据（包括表头）
-                  for i, line in enumerate(lines[:11]):  # 显示前11行（包括表头）
+                  for i, line in enumerate(lines[:11]):
                       if i == 0:
-                          continue  # 跳过表头行，上面已显示
+                          continue
                       print(f"  {line.strip()}")
                   if len(lines) > 11:
                       print(f"  ... 还有 {len(lines)-11} 行数据")
@@ -170,35 +180,16 @@ jobs:
               print("🌤️  腾讯地图天气数据自动抓取任务开始")
               beijing_time = get_beijing_time()
               print(f"📅 当前北京时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
-              # 【修改】更新说明文字
-              print("📋 提取第3-28个数据（索引2-27，共26条）")
+              print("📋 尝试提取第3-28个数据（索引2-27，共26条）")
               print("=" * 60)
               
-              # 获取天气数据
               weather_data = fetch_weather_data()
               if not weather_data:
                   print("❌ 获取天气数据失败，退出任务")
                   return
               
-              # 解析小时预报数据
               hourly_data = parse_hourly_forecast(weather_data)
               
-              if hourly_data:
-                  print(f"📋 解析到的数据（索引2-27，共{len(hourly_data)}条）:")
-                  # 【修改】显示前5条和后5条数据，避免输出太多
-                  if len(hourly_data) > 10:
-                      for i in range(5):
-                          data = hourly_data[i]
-                          print(f"  第{i+1:2d}条: {data['time']}: {data['temperature']}℃")
-                      print(f"  ... (中间省略 {len(hourly_data)-10} 条数据)")
-                      for i in range(len(hourly_data)-5, len(hourly_data)):
-                          data = hourly_data[i]
-                          print(f"  第{i+1:2d}条: {data['time']}: {data['temperature']}℃")
-                  else:
-                      for i, data in enumerate(hourly_data, 1):
-                          print(f"  第{i:2d}条: {data['time']}: {data['temperature']}℃")
-              
-              # 保存为CSV（覆盖写入）
               success = save_to_csv(hourly_data, beijing_time)
               
               print("=" * 60)
@@ -224,7 +215,6 @@ jobs:
           if [ -f "weather_forecast.csv" ]; then
             echo "文件大小: $(wc -l < weather_forecast.csv) 行"
             echo "----------------------------------------"
-            # 【修改】显示更多行，因为现在有26条数据
             head -15 weather_forecast.csv | column -t -s, 2>/dev/null || head -15 weather_forecast.csv
             echo "----------------------------------------"
           else
@@ -233,18 +223,14 @@ jobs:
 
       - name: 5. 提交更新到仓库
         run: |
-          # 配置Git用户
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           
-          # 添加生成的CSV文件
           git add weather_forecast.csv 2>/dev/null || echo "注意：未找到CSV文件"
           
-          # 检查是否有文件变更
           if git diff --staged --quiet; then
             echo "ℹ️  数据无变化，无需提交。"
           else
-            # 提交并推送（使用北京时间时间戳）
             BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
             git commit -m "🌤️ 自动更新天气预报数据 [${BEIJING_TIME} 北京时间]"
             git push
