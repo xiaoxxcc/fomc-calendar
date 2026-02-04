@@ -6,7 +6,7 @@ on:
     paths:
       - '.github/workflows/weather.yml'
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '0 18 * * *'
   workflow_dispatch:
 
 permissions:
@@ -110,15 +110,20 @@ jobs:
                   hour_str = info_item.get('hour', '')
                   temperature = info_item.get('info', {}).get('temperature', 'N/A')
                   
-                  # 提取时间部分（从"2026-02-02 12:00:00"中提取"12:00"）
-                  if hour_str and len(hour_str) >= 16:
-                      # 提取"HH:MM"部分
-                      time_part = hour_str[11:16]  # 取"12:00"
+                  # 解析完整的时间字符串，拆分为日期和时间
+                  if hour_str and len(hour_str) >= 19:
+                      # 日期部分（如"2026-02-04"）
+                      date_part = hour_str[0:10]
+                      # 时间部分（如"17:00"）
+                      time_part = hour_str[11:16]
                   else:
-                      time_part = f"{(i+14) % 24:02d}:00"  # 调整默认格式
+                      # 如果没有有效的时间字符串，使用默认值
+                      date_part = "未知日期"
+                      time_part = f"{(i+14) % 24:02d}:00"
                   
                   hourly_data.append({
-                      'time': time_part,
+                      'date': date_part,    # 日期部分
+                      'time': time_part,    # 时间部分
                       'temperature': temperature
                   })
               
@@ -130,7 +135,7 @@ jobs:
                   for idx, data in enumerate(hourly_data):
                       original_idx = start_idx + idx
                       original_hour = infos[original_idx].get('hour', '未知时间') if original_idx < len(infos) else '未知'
-                      print(f"  索引{original_idx:2d} ({original_hour[5:16] if len(original_hour)>=16 else original_hour}): {data['time']} - {data['temperature']}℃")
+                      print(f"  索引{original_idx:2d} ({original_hour}): {data['date']} {data['time']} - {data['temperature']}℃")
               
               return hourly_data
           
@@ -142,27 +147,30 @@ jobs:
                   print("⚠️  未获取到数据，将创建空文件")
                   with open(filename, 'w', encoding='utf-8', newline='') as f:
                       writer = csv.writer(f)
-                      writer.writerow(['时间', '温度(℃)', '抓取时间'])
+                      # 【修改】列顺序：日期、时间、温度(℃)、抓取时间
+                      writer.writerow(['日期', '时间', '温度(℃)', '抓取时间'])
                   print(f"📄 已创建空文件: {filename}")
                   return False
               
               with open(filename, 'w', encoding='utf-8', newline='') as f:
                   writer = csv.writer(f)
-                  writer.writerow(['时间', '温度(℃)', '抓取时间'])
+                  # 【修改】列顺序：日期、时间、温度(℃)、抓取时间
+                  writer.writerow(['日期', '时间', '温度(℃)', '抓取时间'])
                   
                   capture_time = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
                   for data in hourly_data:
                       writer.writerow([
-                          data['time'],
-                          data['temperature'],
-                          capture_time
+                          data['date'],      # 日期（第一列）
+                          data['time'],      # 时间（第二列）
+                          data['temperature'], # 温度（第三列）
+                          capture_time       # 抓取时间（第四列）
                       ])
               
               print(f"💾 数据已保存到: {filename}")
               print(f"📊 共写入 {len(hourly_data)} 条小时预报数据")
               
               print("📋 文件内容预览:")
-              print("  " + ", ".join(['时间', '温度(℃)', '抓取时间']))
+              print("  " + ", ".join(['日期', '时间', '温度(℃)', '抓取时间']))
               with open(filename, 'r', encoding='utf-8') as f:
                   lines = f.readlines()
                   for i, line in enumerate(lines[:11]):
@@ -215,6 +223,7 @@ jobs:
           if [ -f "weather_forecast.csv" ]; then
             echo "文件大小: $(wc -l < weather_forecast.csv) 行"
             echo "----------------------------------------"
+            # 显示完整的内容，现在有4列：日期、时间、温度、抓取时间
             head -15 weather_forecast.csv | column -t -s, 2>/dev/null || head -15 weather_forecast.csv
             echo "----------------------------------------"
           else
