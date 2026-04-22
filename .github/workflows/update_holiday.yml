@@ -1,0 +1,85 @@
+name: Auto Update Holiday Calendar
+
+on:
+  schedule:
+    # 每月10号 UTC 14:00 = 北京时间 22:00
+    - cron: '0 14 10 * *'
+  workflow_dispatch:   # 允许手动触发测试
+
+permissions:
+  contents: write      # 允许推送提交
+
+jobs:
+  update-holiday-ics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 检出仓库代码
+        uses: actions/checkout@v4
+
+      - name: 2. 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 3. 安装依赖
+        run: pip install requests
+
+      - name: 4. 下载并处理假期日历
+        run: |
+          python << 'EOF'
+          import requests
+          import re
+
+          URL = "https://www.shuyz.com/githubfiles/china-holiday-calender/master/holidayCal.ics"
+          OUTPUT_FILE = "holidayCal.ics"
+
+          print(f"📡 正在下载: {URL}")
+          resp = requests.get(URL, timeout=30)
+          resp.raise_for_status()
+          raw_data = resp.text
+
+          print("🔄 正在处理 SUMMARY 字段...")
+          lines = raw_data.splitlines(keepends=True)
+          processed_lines = []
+
+          for line in lines:
+              if line.startswith("SUMMARY:"):
+                  content = line[8:]   # 去掉 "SUMMARY:"
+                  # 查找第一个“第”字的位置
+                  di_index = content.find("第")
+                  if di_index > 0:
+                      # 在“第”字之前的部分中，查找最后一个空格（即离“第”最近的一个空格）
+                      prefix_before_di = content[:di_index]
+                      last_space = prefix_before_di.rfind(" ")
+                      if last_space != -1:
+                          # 将这个空格替换为换行符 \n
+                          new_content = (content[:last_space] + "\n" + content[last_space+1:])
+                          line = "SUMMARY:" + new_content
+              processed_lines.append(line)
+
+          print(f"💾 正在保存至: {OUTPUT_FILE}")
+          with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
+              f.writelines(processed_lines)
+
+          print("✅ 处理完成！")
+          EOF
+
+      - name: 5. 查看处理结果（日志预览）
+        run: |
+          echo "=== 生成的 holidayCal.ics 前 30 行预览 ==="
+          head -30 holidayCal.ics
+
+      - name: 6. 提交更新到仓库
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add holidayCal.ics
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️ 文件内容无变化，跳过提交。"
+          else
+            BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
+            git commit -m "📅 更新假期日历（处理 SUMMARY 换行）[${BEIJING_TIME} 北京时间]"
+            git push
+            echo "✅ 更新已推送！"
+          fi
