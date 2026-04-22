@@ -24,13 +24,12 @@ jobs:
       - name: 3. 安装依赖
         run: pip install requests
 
-      - name: 4. 下载并处理假期日历
+      - name: 4. 下载并处理假期日历（将“第”前空格替换为4个空格）
         run: |
           python << 'EOF'
           import requests
-          import re
 
-          URL = "https://www.shuyz.com/githubfiles/china-holiday-calender/master/holidayCal.ics"
+          URL = "https://raw.githubusercontent.com/xiaoxxcc/fomc-calendar/main/holidayCal.ics"
           OUTPUT_FILE = "holidayCal.ics"
 
           print(f"📡 正在下载: {URL}")
@@ -45,15 +44,13 @@ jobs:
           for line in lines:
               if line.startswith("SUMMARY:"):
                   content = line[8:]   # 去掉 "SUMMARY:"
-                  # 查找第一个“第”字的位置
                   di_index = content.find("第")
                   if di_index > 0:
-                      # 在“第”字之前的部分中，查找最后一个空格（即离“第”最近的一个空格）
                       prefix_before_di = content[:di_index]
                       last_space = prefix_before_di.rfind(" ")
                       if last_space != -1:
-                          # 将这个空格替换为换行符 \n
-                          new_content = (content[:last_space] + "\n" + content[last_space+1:])
+                          # 【关键修改】将离“第”最近的那个空格替换为 4 个空格
+                          new_content = (content[:last_space] + "    " + content[last_space+1:])
                           line = "SUMMARY:" + new_content
               processed_lines.append(line)
 
@@ -79,7 +76,7 @@ jobs:
             echo "ℹ️ 文件内容无变化，跳过提交。"
           else
             BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
-            git commit -m "📅 更新假期日历（处理 SUMMARY 换行）[${BEIJING_TIME} 北京时间]"
+            git commit -m "📅 更新假期日历（处理 SUMMARY 缩进）[${BEIJING_TIME} 北京时间]"
             git push
             echo "✅ 更新已推送！"
           fi
