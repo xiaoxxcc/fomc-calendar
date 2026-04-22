@@ -50,7 +50,7 @@ jobs:
                       last_space = prefix_before_di.rfind(" ")
                       if last_space != -1:
                           # 将离“第”最近的那个空格替换为 4 个空格
-                          new_content = (content[:last_space] + "    " + content[last_space+1:])
+                          new_content = (content[:last_space] + "        " + content[last_space+1:])
                           line = "SUMMARY:" + new_content
               processed_lines.append(line)
 
