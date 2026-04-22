@@ -29,7 +29,7 @@ jobs:
           python << 'EOF'
           import requests
 
-          URL = "https://raw.githubusercontent.com/xiaoxxcc/fomc-calendar/main/holidayCal.ics"
+          URL = "https://www.shuyz.com/githubfiles/china-holiday-calender/master/holidayCal.ics"
           OUTPUT_FILE = "holidayCal.ics"
 
           print(f"📡 正在下载: {URL}")
@@ -49,7 +49,7 @@ jobs:
                       prefix_before_di = content[:di_index]
                       last_space = prefix_before_di.rfind(" ")
                       if last_space != -1:
-                          # 【关键修改】将离“第”最近的那个空格替换为 4 个空格
+                          # 将离“第”最近的那个空格替换为 4 个空格
                           new_content = (content[:last_space] + "    " + content[last_space+1:])
                           line = "SUMMARY:" + new_content
               processed_lines.append(line)
