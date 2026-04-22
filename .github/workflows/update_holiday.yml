@@ -24,7 +24,7 @@ jobs:
       - name: 3. 安装依赖
         run: pip install requests
 
-      - name: 4. 下载并处理假期日历（将“第X天/共Y天”替换为“X/Y”）
+      - name: 4. 下载并处理假期日历（替换为 R1/3 或 W1/3 格式）
         run: |
           python << 'EOF'
           import requests
@@ -42,15 +42,19 @@ jobs:
           lines = raw_data.splitlines(keepends=True)
           processed_lines = []
 
-          # 正则匹配：第(\d+)天/共(\d+)天
-          pattern = re.compile(r'第(\d+)天/共(\d+)天')
+          # 定义替换规则
+          patterns = [
+              (re.compile(r'假期 第(\d+)天/共(\d+)天'), r'R\1/\2'),   # 假期 → R
+              (re.compile(r'补班 第(\d+)天/共(\d+)天'), r'W\1/\2')    # 补班 → W
+          ]
 
           for line in lines:
               if line.startswith("SUMMARY:"):
                   content = line[8:]   # 去掉 "SUMMARY:"
-                  # 替换“第X天/共Y天”为“X/Y”
-                  new_content = pattern.sub(r'\1/\2', content)
-                  line = "SUMMARY:" + new_content
+                  # 依次应用替换规则
+                  for pattern, replacement in patterns:
+                      content = pattern.sub(replacement, content)
+                  line = "SUMMARY:" + content
               processed_lines.append(line)
 
           print(f"💾 正在保存至: {OUTPUT_FILE}")
@@ -75,7 +79,7 @@ jobs:
             echo "ℹ️ 文件内容无变化，跳过提交。"
           else
             BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
-            git commit -m "📅 更新假期日历（简化天数显示）[${BEIJING_TIME} 北京时间]"
+            git commit -m "📅 更新假期日历（R/W缩写格式）[${BEIJING_TIME} 北京时间]"
             git push
             echo "✅ 更新已推送！"
           fi
