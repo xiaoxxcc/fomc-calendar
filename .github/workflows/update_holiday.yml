@@ -3,7 +3,7 @@ name: Auto Update Holiday Calendar
 on:
   schedule:
     # 每月10号 UTC 14:00 = 北京时间 22:00
-    - cron: '0 14 10 * *'
+    - cron: '0 21 10,20 * *'
   workflow_dispatch:   # 允许手动触发测试
 
 permissions:
