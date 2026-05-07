@@ -174,9 +174,8 @@ jobs:
                       
                       # 判断是否为SEP会议（带星号*）
                       is_sep = '*' in date_text
-                      has_press = is_sep
                       
-                      # 解析日期范围
+                      # 解析日期范围（移除星号）
                       clean_date = date_text.replace('*', '').strip()
                       try:
                           start_date, end_date = parse_date_range(clean_date, month_num, panel_year)
@@ -184,16 +183,12 @@ jobs:
                           print(f"    日期解析错误 '{date_text}': {e}")
                           continue
                       
-                      # 构建会议信息
+                      # 构建会议信息（仅保留 year、start_date、end_date、is_sep）
                       meeting_info = {
                           'year': panel_year,
                           'start_date': start_date,
                           'end_date': end_date,
-                          'month_display': month_text,
-                          'date_display': clean_date,
-                          'is_sep': is_sep,
-                          'has_press': has_press,
-                          'summary': f"FOMC Meeting{' *SEP' if is_sep else ''}"
+                          'is_sep': is_sep
                       }
                       all_meetings.append(meeting_info)
                       meeting_count += 1
@@ -206,15 +201,15 @@ jobs:
               return all_meetings
 
           def save_data(meetings):
-              """将会议数据保存为JSON、CSV和TXT文件"""
+              """将会议数据仅保存为JSON文件（移除其他字段）"""
               if not meetings:
-                  print("⚠️  未获取到数据，将创建空文件")
+                  print("⚠️  未获取到数据，将创建空JSON文件")
                   meetings = []
               
               # 获取北京时间
               beijing_time = get_beijing_time()
               
-              # 1. 保存为JSON
+              # 保存为JSON
               json_data = {
                   'meta': {
                       'last_updated': beijing_time.isoformat(),  # 使用北京时间
@@ -230,38 +225,8 @@ jobs:
               with open('fomc_calendar.json', 'w', encoding='utf-8') as f:
                   json.dump(json_data, f, indent=2, ensure_ascii=False)
               
-              # 2. 保存为CSV
-              if meetings:
-                  with open('fomc_calendar.csv', 'w', encoding='utf-8', newline='') as f:
-                      fieldnames = ['year', 'start_date', 'end_date', 'summary', 'is_sep', 'has_press']
-                      writer = csv.DictWriter(f, fieldnames=fieldnames)
-                      writer.writeheader()
-                      for m in meetings:
-                          writer.writerow({
-                              'year': m['year'],
-                              'start_date': m['start_date'],
-                              'end_date': m['end_date'],
-                              'summary': m['summary'],
-                              'is_sep': m['is_sep'],
-                              'has_press': m['has_press']
-                          })
-              else:
-                  with open('fomc_calendar.csv', 'w', encoding='utf-8', newline='') as f:
-                      f.write('year,start_date,end_date,summary,is_sep,has_press\n')
-              
-              # 3. 保存为纯文本
-              with open('fomc_dates.txt', 'w', encoding='utf-8') as f:
-                  if meetings:
-                      for m in meetings:
-                          sep_marker = ' *SEP' if m['is_sep'] else ''
-                          f.write(f"{m['start_date']} 至 {m['end_date']}{sep_marker}\n")
-                  else:
-                      f.write("未找到会议数据\n")
-              
               print(f"💾 数据文件已保存:")
               print(f"   - fomc_calendar.json ({len(meetings)} 个会议)")
-              print(f"   - fomc_calendar.csv")
-              print(f"   - fomc_dates.txt")
               
               # 显示北京时间
               beijing_str = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
@@ -299,7 +264,7 @@ jobs:
       - name: 4. 查看生成的文件
         run: |
           echo "=== 生成的文件列表 ==="
-          ls -la *.json *.csv *.txt 2>/dev/null || echo "未找到数据文件"
+          ls -la fomc_calendar.json 2>/dev/null || echo "未找到 fomc_calendar.json"
           echo ""
           echo "=== JSON文件元信息预览 ==="
           if [ -f "fomc_calendar.json" ]; then
@@ -322,8 +287,8 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           
-          # 添加生成的数据文件
-          git add fomc_calendar.json fomc_calendar.csv fomc_dates.txt 2>/dev/null || echo "注意：未找到数据文件"
+          # 仅添加生成的JSON数据文件
+          git add fomc_calendar.json 2>/dev/null || echo "注意：未找到 fomc_calendar.json"
           
           # 检查是否有文件变更
           if git diff --staged --quiet; then
