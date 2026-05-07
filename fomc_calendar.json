@@ -1,6 +1,6 @@
 {
   "meta": {
-    "last_updated": "2026-05-01T23:44:20.271437+08:00",
+    "last_updated": "2026-05-07T16:56:36.150213+08:00",
     "source": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
     "count": 16,
     "note": "FOMC Meeting Calendar Data (当前年及未来)",
@@ -12,161 +12,97 @@
       "year": 2026,
       "start_date": "2026-01-27",
       "end_date": "2026-01-28",
-      "month_display": "January",
-      "date_display": "27-28",
-      "is_sep": false,
-      "has_press": false,
-      "summary": "FOMC Meeting"
+      "is_sep": false
     },
     {
       "year": 2026,
       "start_date": "2026-03-17",
       "end_date": "2026-03-18",
-      "month_display": "March",
-      "date_display": "17-18",
-      "is_sep": true,
-      "has_press": true,
-      "summary": "FOMC Meeting *SEP"
+      "is_sep": true
     },
     {
       "year": 2026,
       "start_date": "2026-04-28",
       "end_date": "2026-04-29",
-      "month_display": "April",
-      "date_display": "28-29",
-      "is_sep": false,
-      "has_press": false,
-      "summary": "FOMC Meeting"
+      "is_sep": false
     },
     {
       "year": 2026,
       "start_date": "2026-06-16",
       "end_date": "2026-06-17",
-      "month_display": "June",
-      "date_display": "16-17",
-      "is_sep": true,
-      "has_press": true,
-      "summary": "FOMC Meeting *SEP"
+      "is_sep": true
     },
     {
       "year": 2026,
       "start_date": "2026-07-28",
       "end_date": "2026-07-29",
-      "month_display": "July",
-      "date_display": "28-29",
-      "is_sep": false,
-      "has_press": false,
-      "summary": "FOMC Meeting"
+      "is_sep": false
     },
     {
       "year": 2026,
       "start_date": "2026-09-15",
       "end_date": "2026-09-16",
-      "month_display": "September",
-      "date_display": "15-16",
-      "is_sep": true,
-      "has_press": true,
-      "summary": "FOMC Meeting *SEP"
+      "is_sep": true
     },
     {
       "year": 2026,
       "start_date": "2026-10-27",
       "end_date": "2026-10-28",
-      "month_display": "October",
-      "date_display": "27-28",
-      "is_sep": false,
-      "has_press": false,
-      "summary": "FOMC Meeting"
+      "is_sep": false
     },
     {
       "year": 2026,
       "start_date": "2026-12-08",
       "end_date": "2026-12-09",
-      "month_display": "December",
-      "date_display": "8-9",
-      "is_sep": true,
-      "has_press": true,
-      "summary": "FOMC Meeting *SEP"
+      "is_sep": true
     },
     {
       "year": 2027,
       "start_date": "2027-01-26",
       "end_date": "2027-01-27",
-      "month_display": "January",
-      "date_display": "26-27",
-      "is_sep": false,
-      "has_press": false,
-      "summary": "FOMC Meeting"
+      "is_sep": false
     },
     {
       "year": 2027,
       "start_date": "2027-03-16",
       "end_date": "2027-03-17",
-      "month_display": "March",
-      "date_display": "16-17",
-      "is_sep": true,
-      "has_press": true,
-      "summary": "FOMC Meeting *SEP"
+      "is_sep": true
     },
     {
       "year": 2027,
       "start_date": "2027-04-27",
       "end_date": "2027-04-28",
-      "month_display": "April",
-      "date_display": "27-28",
-      "is_sep": false,
-      "has_press": false,
-      "summary": "FOMC Meeting"
+      "is_sep": false
     },
     {
       "year": 2027,
       "start_date": "2027-06-08",
       "end_date": "2027-06-09",
-      "month_display": "June",
-      "date_display": "8-9",
-      "is_sep": true,
-      "has_press": true,
-      "summary": "FOMC Meeting *SEP"
+      "is_sep": true
     },
     {
       "year": 2027,
       "start_date": "2027-07-27",
       "end_date": "2027-07-28",
-      "month_display": "July",
-      "date_display": "27-28",
-      "is_sep": false,
-      "has_press": false,
-      "summary": "FOMC Meeting"
+      "is_sep": false
     },
     {
       "year": 2027,
       "start_date": "2027-09-14",
       "end_date": "2027-09-15",
-      "month_display": "September",
-      "date_display": "14-15",
-      "is_sep": true,
-      "has_press": true,
-      "summary": "FOMC Meeting *SEP"
+      "is_sep": true
     },
     {
       "year": 2027,
       "start_date": "2027-10-26",
       "end_date": "2027-10-27",
-      "month_display": "October",
-      "date_display": "26-27",
-      "is_sep": false,
-      "has_press": false,
-      "summary": "FOMC Meeting"
+      "is_sep": false
     },
     {
       "year": 2027,
       "start_date": "2027-12-07",
       "end_date": "2027-12-08",
-      "month_display": "December",
-      "date_display": "7-8",
-      "is_sep": true,
-      "has_press": true,
-      "summary": "FOMC Meeting *SEP"
+      "is_sep": true
     }
   ]
 }
