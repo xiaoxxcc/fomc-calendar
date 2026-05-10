@@ -24,11 +24,12 @@ jobs:
       - name: 3. 安装依赖
         run: pip install requests
 
-      - name: 4. 下载并处理假期日历（替换为 R1/3 或 W1/3 格式）
+      - name: 4. 下载并处理假期日历（替换为 R1/3 或 W1/3 格式，并添加动态时间戳）
         run: |
           python << 'EOF'
           import requests
           import re
+          from datetime import datetime, timezone, timedelta
 
           URL = "https://www.shuyz.com/githubfiles/china-holiday-calender/master/holidayCal.ics"
           OUTPUT_FILE = "holidayCal.ics"
@@ -57,17 +58,25 @@ jobs:
                   line = "SUMMARY:" + content
               processed_lines.append(line)
 
+          # 🔥 添加动态生成时间戳（北京时间），确保每次运行都能触发提交
+          beijing_tz = timezone(timedelta(hours=8))
+          gen_time = datetime.now(beijing_tz).strftime('%Y-%m-%dT%H:%M:%S+08:00')
+          processed_lines.append(f"X-GENERATED-AT:{gen_time}\n")
+
           print(f"💾 正在保存至: {OUTPUT_FILE}")
           with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
               f.writelines(processed_lines)
 
-          print("✅ 处理完成！")
+          print("✅ 处理完成！（每次运行都会因时间戳不同而触发提交）")
           EOF
 
       - name: 5. 查看处理结果（日志预览）
         run: |
           echo "=== 生成的 holidayCal.ics 前 30 行预览 ==="
           head -30 holidayCal.ics
+          echo ""
+          echo "=== 文件末尾 3 行（含时间戳） ==="
+          tail -3 holidayCal.ics
 
       - name: 6. 提交更新到仓库
         run: |
