@@ -52,61 +52,73 @@ jobs:
               return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
 
           def get_text(url, params=None):
-              """通用请求，返回 UTF-8 文本"""
               resp = requests.get(url, params=params, headers=HEADERS, timeout=30)
               resp.encoding = "utf-8"
               return resp.text
 
           def find_detail_links(search_html):
-              """从搜索结果页提取每个年份通知的原文链接"""
               soup = BeautifulSoup(search_html, "lxml")
               links = {}
-              # 常见搜索结果的容器选择器（根据网站结构调整）
               for a in soup.select("a[href]"):
                   title = a.get_text(strip=True)
                   href = a["href"]
                   if not title or not href:
                       continue
-                  # 仅匹配核心通知标题，排除图解、图表等
                   match = re.match(r"国务院办公厅关于(\d{4})年部分节假日安排的通知$", title)
-                  if not match:
-                      continue
-                  year = int(match.group(1))
-                  # 避免重复保存同一年
-                  if year not in links:
-                      # 补全相对链接
-                      if href.startswith("/"):
-                          href = "https://www.gov.cn" + href
-                      links[year] = href
-              print(f"搜索结果中找到的年份详情链接：{list(links.keys())}")
+                  if match:
+                      year = int(match.group(1))
+                      if year not in links:
+                          if href.startswith("/"):
+                              href = "https://www.gov.cn" + href
+                          links[year] = href
+              print(f"搜索结果中找到的年份链接：{list(links.keys())}")
               return links
 
-          def parse_detail_page(html, year):
-              """解析详情页，提取放假安排（同之前逻辑）"""
+          def extract_main_text(html):
+              """提取详情页的正文文本，多种选择器降级"""
               soup = BeautifulSoup(html, "lxml")
-              # 获取正文容器，常见为 class="pages_content" 或 id="UCAP-CONTENT"
-              content = (soup.find("div", class_="pages_content") or
-                         soup.find("div", id="UCAP-CONTENT") or
-                         soup.find("div", class_="article-content"))
-              if not content:
-                  print(f"  警告：{year} 年详情页未找到正文容器")
-                  return []
-              text = content.get_text("\n", strip=True)
+              # 尝试已知的正文容器
+              selectors = [
+                  "div.pages_content",
+                  "div#UCAP-CONTENT",
+                  "div.article-content",
+                  "div.article_con",
+                  "div.content",
+                  "div.TRS_Editor",
+                  "div.news_content"
+              ]
+              for sel in selectors:
+                  container = soup.select_one(sel)
+                  if container:
+                      return container.get_text("\n", strip=True)
+              # 最终回退：使用 body 的文本
+              body = soup.find("body")
+              if body:
+                  return body.get_text("\n", strip=True)
+              return soup.get_text("\n", strip=True)
 
-              # 分割假期段落
+          def parse_detail_page(html, year):
+              """解析正文，返回假期列表，处理合并假期"""
+              text = extract_main_text(html)
+              if not text:
+                  print(f"  警告：{year} 年正文为空")
+                  return []
+              print(f"  正文前100字符：{text[:100]}")
+              
+              # 匹配假期段落：一、元旦：... 二、春节：...
               part_pat = re.compile(
-                  r"([一二三四五六七]、\s*(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)[：:]\s*)(.*?)(?=[一二三四五六七]、\s*(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)|$)",
+                  r"([一二三四五六七]、\s*((?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)[、，]?(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)?)[：:]\s*)(.*?)(?=[一二三四五六七]、\s*(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)|$)",
                   re.DOTALL
               )
               holidays = []
-              for prefix, detail in part_pat.findall(text):
-                  name_m = re.search(r"(元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)", prefix)
-                  if not name_m:
-                      continue
-                  name = name_m.group(1)
-                  off, work = [], []
+              for prefix, complex_name, detail in part_pat.findall(text):
+                  # 处理合并假期名称，如“国庆节、中秋节”拆成两个
+                  names = re.split(r"[、，]", complex_name)
+                  highlight_off = None
+                  highlight_work = None
 
-                  # 放假区间
+                  # 解析放假区间
+                  off = []
                   range_pat = re.compile(r"(\d{1,2})月(\d{1,2})日[至到\-~]+(?:(\d{1,2})月)?(\d{1,2})日")
                   for m in range_pat.finditer(detail):
                       m1, d1 = int(m.group(1)), int(m.group(2))
@@ -114,7 +126,7 @@ jobs:
                       d2 = int(m.group(4))
                       off.append([f"{year:04d}-{m1:02d}-{d1:02d}", f"{year:04d}-{m2:02d}-{d2:02d}"])
 
-                  # 单日放假
+                  # 单日放假（如元旦不调休）
                   if not off:
                       single = re.search(r"(\d{1,2})月(\d{1,2})日.*?放假", detail)
                       if single:
@@ -122,6 +134,7 @@ jobs:
                           off.append([f"{year:04d}-{m:02d}-{d:02d}", f"{year:04d}-{m:02d}-{d:02d}"])
 
                   # 上班日
+                  work = []
                   work_pat = re.compile(r"(\d{1,2})月(\d{1,2})日[（(][^）)]*[）)]?上班")
                   for m in work_pat.finditer(detail):
                       mo, day = int(m.group(1)), int(m.group(2))
@@ -129,10 +142,16 @@ jobs:
                       if date_str not in work:
                           work.append(date_str)
 
-                  obj = {"n": name, "off": off}
-                  if work:
-                      obj["work"] = work
-                  holidays.append(obj)
+                  if not off:  # 没有日期则跳过此组
+                      continue
+
+                  # 为每个假期名称创建对象（处理合并）
+                  for name in names:
+                      obj = {"n": name.strip(), "off": off}
+                      if work:
+                          obj["work"] = work
+                      holidays.append(obj)
+
               return holidays
 
           def filter_december_only(holidays):
@@ -145,7 +164,7 @@ jobs:
                   search_html = get_text(SEARCH_URL, SEARCH_PARAMS)
                   links = find_detail_links(search_html)
                   if not links:
-                      print("❌ 未找到任何年份的通知链接，可能页面结构变化。")
+                      print("❌ 未找到任何年份通知链接，生成空JSON。")
                       with open(output_path, "w", encoding="utf-8") as f:
                           json.dump([], f)
                       return
@@ -162,7 +181,7 @@ jobs:
                       detail_html = get_text(links[year])
                       holidays = parse_detail_page(detail_html, year)
                       if not holidays:
-                          print(f"  警告：{year} 年详情页解析失败")
+                          print(f"  警告：{year} 年无有效假期数据")
                           continue
 
                       if year == current_year - 1:
@@ -175,7 +194,7 @@ jobs:
                       results.append({"y": year, "h": holidays})
 
                   if not results:
-                      print("⚠️ 最终无数据，生成空 JSON。")
+                      print("⚠️ 最终无数据，生成空JSON。")
                       with open(output_path, "w", encoding="utf-8") as f:
                           json.dump([], f)
                       return
@@ -200,12 +219,10 @@ jobs:
               except Exception:
                   print("❌ 脚本异常：")
                   traceback.print_exc()
-                  # 生成错误文件，确保工作流继续
                   with open(output_path, "w", encoding="utf-8") as f:
                       json.dump({
                           "_meta": {"last_updated": beijing_now().isoformat(), "error": traceback.format_exc()}
                       }, f, ensure_ascii=False, indent=2)
-                  print("已生成错误信息 JSON。")
 
           if __name__ == "__main__":
               main()
@@ -215,7 +232,7 @@ jobs:
       - name: 4. 检查并提交更新
         run: |
           if [ ! -f holiday_xiao.json ]; then
-            echo "❌ 文件未生成，退出"
+            echo "❌ 文件未生成"
             exit 1
           fi
           ls -lh holiday_xiao.json
