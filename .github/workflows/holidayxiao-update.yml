@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '.github/workflows/holidayxiao-update.yml'   # 请将工作流文件保存为该名称
+      - '.github/workflows/holidayxiao-update.yml'   # 确保文件名对应
   schedule:
     # 北京时间每月5、15、25日 13:00 → UTC 05:00
     - cron: '0 5 5,15,25 * *'
@@ -25,7 +25,7 @@ jobs:
       - name: 2. Setup Python and install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4
+          pip install requests beautifulsoup4 lxml     # 添加了 lxml
 
       - name: 3. Fetch holiday data and generate JSON
         run: |
@@ -36,7 +36,6 @@ jobs:
           import re
           from datetime import datetime
 
-          # ========== 配置 ==========
           SEARCH_URL_TEMPLATE = "https://sousuo.www.gov.cn/sousuo/search.shtml?code=17da70961a7&searchWord={year}年部分节假日安排的通知"
           HEADERS = {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -45,45 +44,23 @@ jobs:
           }
 
           def get_full_date(year: int, month: int, day: int) -> str:
-              """补全年月日为 YYYY-MM-DD 格式"""
               return f"{year:04d}-{month:02d}-{day:02d}"
 
           def parse_holiday_text(year: int, text: str):
-              """
-              解析某一个年份的放假通知正文，返回节假日列表。
-              每个节日结构: {"n": "名称", "off": [["开始","结束"]...], "work": ["date",...]}
-              """
               holidays = []
-              # 每个节日以“X、节日名：”开始，X为一二三四...或数字
-              # 使用正则分割每个节日块
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
                   if not block.strip():
                       continue
-                  # 提取节日名称（第一个冒号之前的部分，但要去掉序号）
                   match_name = re.match(r'(?:[一二三四五六七八九十]+|\d+)、(.+?)：', block)
                   if not match_name:
                       continue
                   name = match_name.group(1).strip()
-                  # 去除可能的农历括号注释，保留纯名称
-                  # 例如“春节”可能后面带（农历...），但名称已取出，不需要
-                  # 获取冒号之后的内容
                   content = block[match_name.end():].strip()
-                  # 初始化
                   off_list = []
                   work_list = []
-                  # 提取日期模式：X月X日（周X）
-                  date_pattern = r'(\d{1,2})月(\d{1,2})日'
-                  # 查找所有日期
-                  dates = re.findall(date_pattern, content)
-                  # 日期可能出现在放假范围和上班范围
-                  # 查找“X月X日”所有出现的月日，并附加上下文
-                  # 简单策略：按顺序提取，前一部分为放假区间，后一部分为上班（若有）
-                  # 判断是否包含“上班”字样来区分
                   work_positions = [m.start() for m in re.finditer(r'上班', content)]
-                  # 分割放假部分和工作部分
                   if work_positions:
-                      # 取第一个“上班”前面的为放假部分，后面的为工作部分
                       first_work = work_positions[0]
                       off_text = content[:first_work]
                       work_text = content[first_work:]
@@ -91,23 +68,17 @@ jobs:
                       off_text = content
                       work_text = ""
                   
-                  # 解析放假日期
-                  off_dates = re.findall(date_pattern, off_text)
+                  off_dates = re.findall(r'(\d{1,2})月(\d{1,2})日', off_text)
                   if off_dates:
-                      # 可能是一个区间如“1月28日至2月4日”，或单个“1月1日”
-                      # 如果有“至”连接，则一对日期为起止，否则每个日期独立成单日
-                      # 但更精确：查找“至”前面的月日和后面的月日
                       to_match = re.search(r'(\d{1,2})月(\d{1,2})日(?:.*?)至(?:.*?)(\d{1,2})月(\d{1,2})日', off_text)
                       if to_match:
                           start_m, start_d, end_m, end_d = map(int, to_match.groups())
                           off_list.append([get_full_date(year, start_m, start_d), get_full_date(year, end_m, end_d)])
                       else:
-                          # 没有至，可能是单个日期（如元旦1月1日）或多个独立日期（较少见）
                           for m, d in off_dates:
                               off_list.append([get_full_date(year, int(m), int(d)), get_full_date(year, int(m), int(d))])
                   
-                  # 解析上班日期（调休）
-                  work_dates = re.findall(date_pattern, work_text)
+                  work_dates = re.findall(r'(\d{1,2})月(\d{1,2})日', work_text)
                   for m, d in work_dates:
                       work_list.append(get_full_date(year, int(m), int(d)))
                   
@@ -119,7 +90,6 @@ jobs:
               return holidays
 
           def search_detail_url(year: int):
-              """搜索指定年份的通知，返回详情页URL，失败返回None"""
               search_url = SEARCH_URL_TEMPLATE.format(year=year)
               print(f"  搜索: {search_url}")
               try:
@@ -129,11 +99,8 @@ jobs:
                   print(f"  搜索请求失败: {e}")
                   return None
               soup = BeautifulSoup(resp.content, 'lxml')
-              # 结果列表的链接通常在class='result'的div中的a标签
-              # 根据截图，可能是<div class="result">内的<a>
               results = soup.find_all('div', class_='result')
               if not results:
-                  # 备用选择器，尝试其他结构
                   results = soup.select('.listTxt li, .result, .search_result')
               target = None
               for r in results:
@@ -147,27 +114,23 @@ jobs:
               if not target:
                   print(f"  未找到 {year} 年的通知链接")
                   return None
-              # 处理相对链接
               if target.startswith('/'):
                   target = 'https://www.gov.cn' + target
               return target
 
           def fetch_detail(year: int, url: str):
-              """请求详情页并返回正文文本"""
               print(f"  详情页: {url}")
               try:
                   resp = requests.get(url, headers=HEADERS, timeout=20)
-                  resp.respond_if_not_200()
+                  resp.raise_for_status()           # 修正了笔误
               except Exception as e:
                   print(f"  详情页请求失败: {e}")
                   return None
               soup = BeautifulSoup(resp.content, 'lxml')
-              # 提取正文内容，可能是 <div class="pages_content"> 或 <div id="UCAP-CONTENT">
               content_div = soup.find('div', class_='pages_content') or soup.find('div', id='UCAP-CONTENT')
               if not content_div:
                   content_div = soup.find('div', class_='article')
               if not content_div:
-                  # 尝试提取所有文本
                   return soup.get_text()
               return content_div.get_text()
 
@@ -194,9 +157,7 @@ jobs:
                       print(f"  成功解析 {len(holidays)} 个节日")
                   else:
                       print(f"  未解析到任何节日")
-              # 按年份排序
               all_data.sort(key=lambda x: x['y'])
-              # 写入JSON文件
               with open('holiday_xiao.json', 'w', encoding='utf-8') as f:
                   json.dump(all_data, f, ensure_ascii=False, indent=2)
               print(f"\n已生成 holiday_xiao.json，包含 {len(all_data)} 年数据")
