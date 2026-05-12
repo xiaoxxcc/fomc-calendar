@@ -6,8 +6,7 @@ on:
     paths:
       - '.github/workflows/holidayxiao-update.yml'
   schedule:
-    # 每月 5、15、25 日 UTC 13:00（北京时间 21:00）
-    - cron: '0 13 5,15,25 * *'
+    - cron: '0 13 5,15,25 * *'   # UTC 13:00，每月5,15,25日
   workflow_dispatch:
 
 permissions:
@@ -27,17 +26,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml
 
-      - name: 3. 抓取国务院放假通知并生成 JSON
+      - name: 3. 抓取并生成节假日 JSON
         run: |
           cat > fetch_holiday.py << 'PYEOF'
           import requests
           from bs4 import BeautifulSoup
           import re
           import json
+          import traceback
           from datetime import datetime, timezone, timedelta
 
           SEARCH_URL = "https://sousuo.www.gov.cn/sousuo/search.shtml"
-          PARAMS = {
+          SEARCH_PARAMS = {
               "code": "17da70961a7",
               "dataTypeId": "107",
               "searchWord": "节假日安排"
@@ -51,70 +51,77 @@ jobs:
           def beijing_now():
               return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
 
-          def get_search_page():
-              resp = requests.get(SEARCH_URL, params=PARAMS, headers=HEADERS, timeout=20)
+          def get_text(url, params=None):
+              """通用请求，返回 UTF-8 文本"""
+              resp = requests.get(url, params=params, headers=HEADERS, timeout=30)
               resp.encoding = "utf-8"
               return resp.text
 
-          def extract_notice_blocks(html):
-              """返回 {year: full_text} 字典，每个年份仅保留第一个有效通知"""
-              soup = BeautifulSoup(html, "lxml")
-              full_text = soup.get_text("\n", strip=True)
-              pattern = re.compile(r"国务院办公厅关于(\d{4})年部分节假日安排的通知")
-              matches = list(pattern.finditer(full_text))
-              blocks = {}
-              for i, m in enumerate(matches):
-                  year = int(m.group(1))
-                  start = m.start()
-                  end = matches[i+1].start() if i+1 < len(matches) else len(full_text)
-                  block_text = full_text[start:end]
-                  # 必须包含详细假期段落才视为有效通知
-                  if "一、元旦" in block_text:
-                      if year not in blocks:
-                          blocks[year] = block_text
-              return blocks
+          def find_detail_links(search_html):
+              """从搜索结果页提取每个年份通知的原文链接"""
+              soup = BeautifulSoup(search_html, "lxml")
+              links = {}
+              # 常见搜索结果的容器选择器（根据网站结构调整）
+              for a in soup.select("a[href]"):
+                  title = a.get_text(strip=True)
+                  href = a["href"]
+                  if not title or not href:
+                      continue
+                  # 仅匹配核心通知标题，排除图解、图表等
+                  match = re.match(r"国务院办公厅关于(\d{4})年部分节假日安排的通知$", title)
+                  if not match:
+                      continue
+                  year = int(match.group(1))
+                  # 避免重复保存同一年
+                  if year not in links:
+                      # 补全相对链接
+                      if href.startswith("/"):
+                          href = "https://www.gov.cn" + href
+                      links[year] = href
+              print(f"搜索结果中找到的年份详情链接：{list(links.keys())}")
+              return links
 
-          def parse_single_notice(text, year):
-              """解析单一年份的放假文本，返回假期列表"""
-              part_pattern = re.compile(
+          def parse_detail_page(html, year):
+              """解析详情页，提取放假安排（同之前逻辑）"""
+              soup = BeautifulSoup(html, "lxml")
+              # 获取正文容器，常见为 class="pages_content" 或 id="UCAP-CONTENT"
+              content = (soup.find("div", class_="pages_content") or
+                         soup.find("div", id="UCAP-CONTENT") or
+                         soup.find("div", class_="article-content"))
+              if not content:
+                  print(f"  警告：{year} 年详情页未找到正文容器")
+                  return []
+              text = content.get_text("\n", strip=True)
+
+              # 分割假期段落
+              part_pat = re.compile(
                   r"([一二三四五六七]、\s*(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)[：:]\s*)(.*?)(?=[一二三四五六七]、\s*(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)|$)",
                   re.DOTALL
               )
               holidays = []
-              for prefix, detail in part_pattern.findall(text):
-                  name_match = re.search(r"(元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)", prefix)
-                  if not name_match:
+              for prefix, detail in part_pat.findall(text):
+                  name_m = re.search(r"(元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)", prefix)
+                  if not name_m:
                       continue
-                  name = name_match.group(1)
-                  off = []
-                  work = []
+                  name = name_m.group(1)
+                  off, work = [], []
 
-                  # 1. 放假区间（跨月或同月）
-                  range_pat = re.compile(
-                      r"(\d{1,2})月(\d{1,2})日[至到\-~]+(?:(\d{1,2})月)?(\d{1,2})日"
-                  )
+                  # 放假区间
+                  range_pat = re.compile(r"(\d{1,2})月(\d{1,2})日[至到\-~]+(?:(\d{1,2})月)?(\d{1,2})日")
                   for m in range_pat.finditer(detail):
                       m1, d1 = int(m.group(1)), int(m.group(2))
-                      if m.group(3):
-                          m2, d2 = int(m.group(3)), int(m.group(4))
-                      else:
-                          m2, d2 = m1, int(m.group(4))
-                      off.append([
-                          f"{year:04d}-{m1:02d}-{d1:02d}",
-                          f"{year:04d}-{m2:02d}-{d2:02d}"
-                      ])
+                      m2 = int(m.group(3)) if m.group(3) else m1
+                      d2 = int(m.group(4))
+                      off.append([f"{year:04d}-{m1:02d}-{d1:02d}", f"{year:04d}-{m2:02d}-{d2:02d}"])
 
-                  # 2. 单日放假（如元旦）
+                  # 单日放假
                   if not off:
                       single = re.search(r"(\d{1,2})月(\d{1,2})日.*?放假", detail)
                       if single:
                           m, d = int(single.group(1)), int(single.group(2))
-                          off.append([
-                              f"{year:04d}-{m:02d}-{d:02d}",
-                              f"{year:04d}-{m:02d}-{d:02d}"
-                          ])
+                          off.append([f"{year:04d}-{m:02d}-{d:02d}", f"{year:04d}-{m:02d}-{d:02d}"])
 
-                  # 3. 上班日期
+                  # 上班日
                   work_pat = re.compile(r"(\d{1,2})月(\d{1,2})日[（(][^）)]*[）)]?上班")
                   for m in work_pat.finditer(detail):
                       mo, day = int(m.group(1)), int(m.group(2))
@@ -122,91 +129,99 @@ jobs:
                       if date_str not in work:
                           work.append(date_str)
 
-                  holiday_obj = {"n": name, "off": off}
+                  obj = {"n": name, "off": off}
                   if work:
-                      holiday_obj["work"] = work
-                  holidays.append(holiday_obj)
-
+                      obj["work"] = work
+                  holidays.append(obj)
               return holidays
 
           def filter_december_only(holidays):
-              """仅保留涉及12月的假期"""
-              dec_holidays = []
-              for h in holidays:
-                  # 检查放假区间是否包含12月（日期格式："YYYY-MM-DD"）
-                  has_dec = any("-12-" in date for off_pair in h["off"] for date in off_pair)
-                  if has_dec:
-                      dec_holidays.append(h)
-              return dec_holidays
+              return [h for h in holidays if any("-12-" in d for off in h["off"] for d in off)]
 
           def main():
-              print("开始抓取国务院放假通知...")
-              html = get_search_page()
-              blocks = extract_notice_blocks(html)
-              current_year = datetime.now().year
-              # 目标年份：去年（仅12月）、今年、明年
-              target_years = [current_year - 1, current_year, current_year + 1]
-              results = []
-
-              for year in target_years:
-                  if year not in blocks:
-                      print(f"未找到 {year} 年放假通知")
-                      continue
-                  print(f"处理 {year} 年...")
-                  holidays = parse_single_notice(blocks[year], year)
-                  if not holidays:
-                      print(f"警告：{year} 年解析失败")
-                      continue
-
-                  # 对去年进行特殊处理：只保留12月的假期
-                  if year == current_year - 1:
-                      holidays = filter_december_only(holidays)
-                      if not holidays:
-                          print(f"{year} 年没有12月的假期，跳过")
-                          continue
-                      print(f"保留 {year} 年12月假期：{', '.join(h['n'] for h in holidays)}")
-
-                  results.append({"y": year, "h": holidays})
-
-              if not results:
-                  print("错误：没有抓取到任何年份数据，不生成文件。")
-                  return
-
-              results.sort(key=lambda x: x["y"])
-
-              # 写入 holiday_xiao.json
               output_path = "holiday_xiao.json"
-              with open(output_path, "w", encoding="utf-8") as f:
-                  json.dump(results, f, ensure_ascii=False, indent=2)
+              try:
+                  print("1. 获取搜索结果页...")
+                  search_html = get_text(SEARCH_URL, SEARCH_PARAMS)
+                  links = find_detail_links(search_html)
+                  if not links:
+                      print("❌ 未找到任何年份的通知链接，可能页面结构变化。")
+                      with open(output_path, "w", encoding="utf-8") as f:
+                          json.dump([], f)
+                      return
 
-              # 写入元信息
-              meta = {
-                  "last_updated": beijing_now().isoformat(),
-                  "source": "Gov.cn search",
-                  "years": [r["y"] for r in results]
-              }
-              with open(output_path, "r+", encoding="utf-8") as f:
-                  data = json.load(f)
-                  data.insert(0, {"_meta": meta})
-                  f.seek(0)
-                  json.dump(data, f, ensure_ascii=False, indent=2)
-                  f.truncate()
+                  current_year = datetime.now().year
+                  target_years = [current_year - 1, current_year, current_year + 1]
+                  results = []
 
-              print(f"✅ 成功生成 {output_path}，包含年份：{meta['years']}")
+                  for year in target_years:
+                      if year not in links:
+                          print(f"未找到 {year} 年通知链接，跳过")
+                          continue
+                      print(f"抓取 {year} 年详情页：{links[year]}")
+                      detail_html = get_text(links[year])
+                      holidays = parse_detail_page(detail_html, year)
+                      if not holidays:
+                          print(f"  警告：{year} 年详情页解析失败")
+                          continue
+
+                      if year == current_year - 1:
+                          holidays = filter_december_only(holidays)
+                          if not holidays:
+                              print(f"  {year} 年无12月假期，跳过")
+                              continue
+                          print(f"  保留 {year} 年12月假期：{[h['n'] for h in holidays]}")
+
+                      results.append({"y": year, "h": holidays})
+
+                  if not results:
+                      print("⚠️ 最终无数据，生成空 JSON。")
+                      with open(output_path, "w", encoding="utf-8") as f:
+                          json.dump([], f)
+                      return
+
+                  results.sort(key=lambda x: x["y"])
+                  with open(output_path, "w", encoding="utf-8") as f:
+                      json.dump(results, f, ensure_ascii=False, indent=2)
+
+                  meta = {
+                      "last_updated": beijing_now().isoformat(),
+                      "source": "Gov.cn detail pages",
+                      "years": [r["y"] for r in results]
+                  }
+                  with open(output_path, "r+", encoding="utf-8") as f:
+                      data = json.load(f)
+                      data.insert(0, {"_meta": meta})
+                      f.seek(0)
+                      json.dump(data, f, ensure_ascii=False, indent=2)
+                      f.truncate()
+                  print(f"✅ 成功生成 {output_path}，年份：{meta['years']}")
+
+              except Exception:
+                  print("❌ 脚本异常：")
+                  traceback.print_exc()
+                  # 生成错误文件，确保工作流继续
+                  with open(output_path, "w", encoding="utf-8") as f:
+                      json.dump({
+                          "_meta": {"last_updated": beijing_now().isoformat(), "error": traceback.format_exc()}
+                      }, f, ensure_ascii=False, indent=2)
+                  print("已生成错误信息 JSON。")
 
           if __name__ == "__main__":
               main()
           PYEOF
           python3 fetch_holiday.py
 
-      - name: 4. 检查生成的文件
+      - name: 4. 检查并提交更新
         run: |
+          if [ ! -f holiday_xiao.json ]; then
+            echo "❌ 文件未生成，退出"
+            exit 1
+          fi
           ls -lh holiday_xiao.json
-          echo "文件内容预览（前20行）："
-          head -20 holiday_xiao.json
+          echo "文件内容预览："
+          head -30 holiday_xiao.json
 
-      - name: 5. 提交更新到仓库
-        run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add holiday_xiao.json
