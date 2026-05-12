@@ -37,11 +37,6 @@ jobs:
           from datetime import datetime, timezone, timedelta
 
           SEARCH_URL = "https://sousuo.www.gov.cn/sousuo/search.shtml"
-          SEARCH_PARAMS = {
-              "code": "17da70961a7",
-              "dataTypeId": "107",
-              "searchWord": "节假日安排"
-          }
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -56,28 +51,28 @@ jobs:
               resp.encoding = "utf-8"
               return resp.text
 
-          def find_detail_links(search_html):
-              soup = BeautifulSoup(search_html, "lxml")
-              links = {}
-              for a in soup.select("a[href]"):
-                  title = a.get_text(strip=True)
-                  href = a["href"]
-                  if not title or not href:
-                      continue
-                  match = re.match(r"国务院办公厅关于(\d{4})年部分节假日安排的通知$", title)
-                  if match:
-                      year = int(match.group(1))
-                      if year not in links:
-                          if href.startswith("/"):
-                              href = "https://www.gov.cn" + href
-                          links[year] = href
-              print(f"搜索结果中找到的年份链接：{list(links.keys())}")
-              return links
+          def search_year_detail_link(year):
+              """精确搜索某年通知，返回详情页链接"""
+              params = {
+                  "code": "17da70961a7",
+                  "dataTypeId": "107",
+                  "searchWord": f"{year}年部分节假日安排的通知"
+              }
+              html = get_text(SEARCH_URL, params)
+              soup = BeautifulSoup(html, "lxml")
+              # 查找标题完全匹配的通知链接
+              target_title = f"国务院办公厅关于{year}年部分节假日安排的通知"
+              for a in soup.find_all("a", string=lambda t: t and t.strip() == target_title):
+                  href = a.get("href")
+                  if href:
+                      if href.startswith("/"):
+                          href = "https://www.gov.cn" + href
+                      return href
+              return None
 
           def extract_main_text(html):
               """提取详情页的正文文本，多种选择器降级"""
               soup = BeautifulSoup(html, "lxml")
-              # 尝试已知的正文容器
               selectors = [
                   "div.pages_content",
                   "div#UCAP-CONTENT",
@@ -91,7 +86,6 @@ jobs:
                   container = soup.select_one(sel)
                   if container:
                       return container.get_text("\n", strip=True)
-              # 最终回退：使用 body 的文本
               body = soup.find("body")
               if body:
                   return body.get_text("\n", strip=True)
@@ -105,35 +99,29 @@ jobs:
                   return []
               print(f"  正文前100字符：{text[:100]}")
               
-              # 匹配假期段落：一、元旦：... 二、春节：...
               part_pat = re.compile(
                   r"([一二三四五六七]、\s*((?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)[、，]?(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)?)[：:]\s*)(.*?)(?=[一二三四五六七]、\s*(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)|$)",
                   re.DOTALL
               )
               holidays = []
               for prefix, complex_name, detail in part_pat.findall(text):
-                  # 处理合并假期名称，如“国庆节、中秋节”拆成两个
                   names = re.split(r"[、，]", complex_name)
-                  highlight_off = None
-                  highlight_work = None
-
-                  # 解析放假区间
                   off = []
+                  # 放假区间
                   range_pat = re.compile(r"(\d{1,2})月(\d{1,2})日[至到\-~]+(?:(\d{1,2})月)?(\d{1,2})日")
                   for m in range_pat.finditer(detail):
                       m1, d1 = int(m.group(1)), int(m.group(2))
                       m2 = int(m.group(3)) if m.group(3) else m1
                       d2 = int(m.group(4))
                       off.append([f"{year:04d}-{m1:02d}-{d1:02d}", f"{year:04d}-{m2:02d}-{d2:02d}"])
-
-                  # 单日放假（如元旦不调休）
+                  # 单日放假
                   if not off:
                       single = re.search(r"(\d{1,2})月(\d{1,2})日.*?放假", detail)
                       if single:
                           m, d = int(single.group(1)), int(single.group(2))
                           off.append([f"{year:04d}-{m:02d}-{d:02d}", f"{year:04d}-{m:02d}-{d:02d}"])
-
-                  # 上班日
+                  if not off:
+                      continue
                   work = []
                   work_pat = re.compile(r"(\d{1,2})月(\d{1,2})日[（(][^）)]*[）)]?上班")
                   for m in work_pat.finditer(detail):
@@ -141,17 +129,11 @@ jobs:
                       date_str = f"{year:04d}-{mo:02d}-{day:02d}"
                       if date_str not in work:
                           work.append(date_str)
-
-                  if not off:  # 没有日期则跳过此组
-                      continue
-
-                  # 为每个假期名称创建对象（处理合并）
                   for name in names:
                       obj = {"n": name.strip(), "off": off}
                       if work:
                           obj["work"] = work
                       holidays.append(obj)
-
               return holidays
 
           def filter_december_only(holidays):
@@ -160,28 +142,21 @@ jobs:
           def main():
               output_path = "holiday_xiao.json"
               try:
-                  print("1. 获取搜索结果页...")
-                  search_html = get_text(SEARCH_URL, SEARCH_PARAMS)
-                  links = find_detail_links(search_html)
-                  if not links:
-                      print("❌ 未找到任何年份通知链接，生成空JSON。")
-                      with open(output_path, "w", encoding="utf-8") as f:
-                          json.dump([], f)
-                      return
-
                   current_year = datetime.now().year
                   target_years = [current_year - 1, current_year, current_year + 1]
                   results = []
 
                   for year in target_years:
-                      if year not in links:
-                          print(f"未找到 {year} 年通知链接，跳过")
+                      print(f"搜索 {year} 年通知链接...")
+                      link = search_year_detail_link(year)
+                      if not link:
+                          print(f"  未找到 {year} 年通知链接，跳过")
                           continue
-                      print(f"抓取 {year} 年详情页：{links[year]}")
-                      detail_html = get_text(links[year])
+                      print(f"  详情页：{link}")
+                      detail_html = get_text(link)
                       holidays = parse_detail_page(detail_html, year)
                       if not holidays:
-                          print(f"  警告：{year} 年无有效假期数据")
+                          print(f"  警告：{year} 年未解析出假期数据")
                           continue
 
                       if year == current_year - 1:
