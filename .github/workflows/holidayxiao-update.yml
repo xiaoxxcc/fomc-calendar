@@ -25,7 +25,7 @@ jobs:
       - name: 2. Setup Python and install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml     # 添加了 lxml
+          pip install requests beautifulsoup4 lxml
 
       - name: 3. Fetch holiday data and generate JSON
         run: |
@@ -38,9 +38,10 @@ jobs:
 
           SEARCH_URL_TEMPLATE = "https://sousuo.www.gov.cn/sousuo/search.shtml?code=17da70961a7&searchWord={year}年部分节假日安排的通知"
           HEADERS = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
               'Accept-Language': 'zh-CN,zh;q=0.9',
+              'Referer': 'https://www.gov.cn/',
           }
 
           def get_full_date(year: int, month: int, day: int) -> str:
@@ -95,34 +96,39 @@ jobs:
               try:
                   resp = requests.get(search_url, headers=HEADERS, timeout=20)
                   resp.raise_for_status()
+                  print(f"  状态码: {resp.status_code}, 内容长度: {len(resp.text)}")
               except Exception as e:
                   print(f"  搜索请求失败: {e}")
                   return None
+
               soup = BeautifulSoup(resp.content, 'lxml')
-              results = soup.find_all('div', class_='result')
-              if not results:
-                  results = soup.select('.listTxt li, .result, .search_result')
-              target = None
-              for r in results:
-                  a_tag = r.find('a', href=True)
-                  if not a_tag:
-                      continue
+              # 策略：遍历所有<a>标签，根据文本匹配
+              target_url = None
+              for a_tag in soup.find_all('a', href=True):
                   title = a_tag.get_text(strip=True)
                   if f'{year}年部分节假日安排的通知' in title:
-                      target = a_tag['href']
+                      target_url = a_tag['href']
+                      print(f"  匹配到链接: {target_url}")
                       break
-              if not target:
-                  print(f"  未找到 {year} 年的通知链接")
+
+              if not target_url:
+                  # 输出部分文本用于调试
+                  print(f"  未找到链接，页面文本片段:")
+                  print(soup.get_text()[:2000])
                   return None
-              if target.startswith('/'):
-                  target = 'https://www.gov.cn' + target
-              return target
+
+              # 处理相对路径
+              if target_url.startswith('/'):
+                  target_url = 'https://www.gov.cn' + target_url
+              elif not target_url.startswith('http'):
+                  target_url = 'https://www.gov.cn/' + target_url
+              return target_url
 
           def fetch_detail(year: int, url: str):
               print(f"  详情页: {url}")
               try:
                   resp = requests.get(url, headers=HEADERS, timeout=20)
-                  resp.raise_for_status()           # 修正了笔误
+                  resp.raise_for_status()
               except Exception as e:
                   print(f"  详情页请求失败: {e}")
                   return None
@@ -131,6 +137,7 @@ jobs:
               if not content_div:
                   content_div = soup.find('div', class_='article')
               if not content_div:
+                  # 回退到整个页面文本
                   return soup.get_text()
               return content_div.get_text()
 
@@ -142,7 +149,7 @@ jobs:
                   print(f"\n=== 处理 {year} 年 ===")
                   detail_url = search_detail_url(year)
                   if not detail_url:
-                      print(f"  跳过 {year} 年（未发布）")
+                      print(f"  跳过 {year} 年（未发布或搜索不到）")
                       continue
                   text = fetch_detail(year, detail_url)
                   if not text:
