@@ -37,7 +37,7 @@ jobs:
           import traceback
           from datetime import datetime, timezone, timedelta
 
-          SEARCH_URL = "https://sousuo.www.gov.cn/sousuo/search.shtml"
+          BASE_SEARCH_URL = "https://sousuo.www.gov.cn/sousuo/search.shtml"
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -54,42 +54,27 @@ jobs:
               return resp.text
 
           def search_detail_link(year):
-              """搜索指定年份通知的详情页链接，带备选策略"""
+              """直接构造精确搜索URL，获取指定年份通知的详情页链接"""
               target_title = f"国务院办公厅关于{year}年部分节假日安排的通知"
+              search_word = f"{year}年部分节假日安排的通知"
+              search_params = {
+                  "code": "17da70961a7",
+                  "searchWord": search_word
+              }
               
-              # 策略1：精确搜索
-              params_exact = {
-                  "code": "17da70961a7",
-                  "dataTypeId": "107",
-                  "searchWord": f"{year}年部分节假日安排的通知"
-              }
-              html = get_text(SEARCH_URL, params_exact)
+              print(f"  请求搜索URL: {BASE_SEARCH_URL}?code=...&searchWord={search_word}")
+              html = get_text(BASE_SEARCH_URL, search_params)
               soup = BeautifulSoup(html, "lxml")
+              
+              # 在搜索结果中查找标题完全匹配的链接
               for a in soup.find_all("a", string=lambda t: t and t.strip() == target_title):
                   href = a.get("href")
                   if href:
                       if href.startswith("/"):
                           href = "https://www.gov.cn" + href
-                      print(f"  [精确搜索] 找到链接")
+                      print(f"  ✅ 找到目标链接")
                       return href
-
-              # 策略2：通用搜索，然后筛选
-              print(f"  [精确搜索] 未找到，尝试通用搜索...")
-              params_general = {
-                  "code": "17da70961a7",
-                  "dataTypeId": "107",
-                  "searchWord": "部分节假日安排的通知"
-              }
-              html = get_text(SEARCH_URL, params_general)
-              soup = BeautifulSoup(html, "lxml")
-              for a in soup.find_all("a", string=lambda t: t and t.strip() == target_title):
-                  href = a.get("href")
-                  if href:
-                      if href.startswith("/"):
-                          href = "https://www.gov.cn" + href
-                      print(f"  [通用搜索] 找到链接")
-                      return href
-
+              print(f"  ❌ 未找到标题为 '{target_title}' 的链接")
               return None
 
           def extract_main_text(html):
@@ -174,30 +159,30 @@ jobs:
                   results = []
 
                   for year in target_years:
-                      print(f"搜索 {year} 年通知链接...")
+                      print(f"\n===== 处理 {year} 年 =====")
                       link = search_detail_link(year)
                       if not link:
-                          print(f"  未找到 {year} 年通知链接，跳过")
+                          print(f"  未找到链接，跳过")
                           continue
                       print(f"  详情页：{link}")
                       detail_html = get_text(link)
                       holidays = parse_detail_page(detail_html, year)
                       if not holidays:
-                          print(f"  警告：{year} 年未解析出假期数据")
+                          print(f"  警告：未解析出假期数据")
                           continue
 
                       # 上一年数据仅保留12月假期
                       if year == current_year - 1:
                           holidays = filter_december_only(holidays)
                           if not holidays:
-                              print(f"  {year} 年无12月假期，跳过")
+                              print(f"  无12月假期，跳过")
                               continue
-                          print(f"  保留 {year} 年12月假期：{[h['n'] for h in holidays]}")
+                          print(f"  保留12月假期：{[h['n'] for h in holidays]}")
 
                       results.append({"y": year, "h": holidays})
 
                   if not results:
-                      print("⚠️ 最终无数据，生成空JSON。")
+                      print("❌ 最终无数据，生成空JSON。")
                       with open(output_path, "w", encoding="utf-8") as f:
                           json.dump([], f)
                       return
@@ -218,7 +203,7 @@ jobs:
                       f.seek(0)
                       json.dump(data, f, ensure_ascii=False, indent=2)
                       f.truncate()
-                  print(f"✅ 成功生成 {output_path}，年份：{meta['years']}")
+                  print(f"\n✅ 成功生成 {output_path}，年份：{meta['years']}")
 
               except Exception:
                   print("❌ 脚本异常：")
