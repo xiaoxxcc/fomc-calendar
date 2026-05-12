@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '.github/workflows/holidayxiao-update.yml'   # 确保文件名对应
+      - '.github/workflows/holidayxiao-update.yml'
   schedule:
     # 北京时间每月5、15、25日 13:00 → UTC 05:00
     - cron: '0 5 5,15,25 * *'
@@ -25,15 +25,21 @@ jobs:
       - name: 2. Setup Python and install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml
+          pip install requests beautifulsoup4 selenium lxml
 
       - name: 3. Fetch holiday data and generate JSON
         run: |
           cat > fetch_holiday.py << 'PYEOF'
           import requests
           from bs4 import BeautifulSoup
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.webdriver.support import expected_conditions as EC
           import json
           import re
+          import time
           from datetime import datetime
 
           SEARCH_URL_TEMPLATE = "https://sousuo.www.gov.cn/sousuo/search.shtml?code=17da70961a7&searchWord={year}年部分节假日安排的通知"
@@ -41,7 +47,6 @@ jobs:
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
               'Accept-Language': 'zh-CN,zh;q=0.9',
-              'Referer': 'https://www.gov.cn/',
           }
 
           def get_full_date(year: int, month: int, day: int) -> str:
@@ -90,19 +95,23 @@ jobs:
                   })
               return holidays
 
-          def search_detail_url(year: int):
+          def search_detail_url(driver, year: int):
               search_url = SEARCH_URL_TEMPLATE.format(year=year)
               print(f"  搜索: {search_url}")
+              driver.get(search_url)
+              # 等待结果容器加载完成
               try:
-                  resp = requests.get(search_url, headers=HEADERS, timeout=20)
-                  resp.raise_for_status()
-                  print(f"  状态码: {resp.status_code}, 内容长度: {len(resp.text)}")
-              except Exception as e:
-                  print(f"  搜索请求失败: {e}")
+                  WebDriverWait(driver, 15).until(
+                      EC.presence_of_element_located((By.CSS_SELECTOR, ".result, .basic_result_content .item"))
+                  )
+              except:
+                  print("  等待搜索结果超时，尝试查看页面源码...")
+                  # 调试输出
+                  print(driver.page_source[:2000])
                   return None
-
-              soup = BeautifulSoup(resp.content, 'lxml')
-              # 策略：遍历所有<a>标签，根据文本匹配
+              time.sleep(2)  # 额外等待确保渲染完毕
+              soup = BeautifulSoup(driver.page_source, 'lxml')
+              # 查找结果链接
               target_url = None
               for a_tag in soup.find_all('a', href=True):
                   title = a_tag.get_text(strip=True)
@@ -110,13 +119,13 @@ jobs:
                       target_url = a_tag['href']
                       print(f"  匹配到链接: {target_url}")
                       break
-
               if not target_url:
-                  # 输出部分文本用于调试
-                  print(f"  未找到链接，页面文本片段:")
-                  print(soup.get_text()[:2000])
+                  print("  未找到通知链接，正在打印页面中所有链接文本...")
+                  for a_tag in soup.find_all('a', href=True)[:30]:
+                      t = a_tag.get_text(strip=True)
+                      if t:
+                          print(f"    {t[:80]} -> {a_tag['href']}")
                   return None
-
               # 处理相对路径
               if target_url.startswith('/'):
                   target_url = 'https://www.gov.cn' + target_url
@@ -137,33 +146,47 @@ jobs:
               if not content_div:
                   content_div = soup.find('div', class_='article')
               if not content_div:
-                  # 回退到整个页面文本
                   return soup.get_text()
               return content_div.get_text()
 
           def main():
+              # 配置无头Chrome
+              chrome_options = Options()
+              chrome_options.add_argument("--headless=new")
+              chrome_options.add_argument("--no-sandbox")
+              chrome_options.add_argument("--disable-dev-shm-usage")
+              chrome_options.add_argument("--disable-gpu")
+              chrome_options.add_argument("--window-size=1920,1080")
+              chrome_options.add_argument(f"user-agent={HEADERS['User-Agent']}")
+              
               current_year = datetime.now().year
               years_to_fetch = [current_year - 1, current_year, current_year + 1]
               all_data = []
-              for year in years_to_fetch:
-                  print(f"\n=== 处理 {year} 年 ===")
-                  detail_url = search_detail_url(year)
-                  if not detail_url:
-                      print(f"  跳过 {year} 年（未发布或搜索不到）")
-                      continue
-                  text = fetch_detail(year, detail_url)
-                  if not text:
-                      print(f"  跳过 {year} 年（无法获取详情）")
-                      continue
-                  holidays = parse_holiday_text(year, text)
-                  if holidays:
-                      all_data.append({
-                          "y": year,
-                          "h": holidays
-                      })
-                      print(f"  成功解析 {len(holidays)} 个节日")
-                  else:
-                      print(f"  未解析到任何节日")
+              
+              driver = webdriver.Chrome(options=chrome_options)
+              try:
+                  for year in years_to_fetch:
+                      print(f"\n=== 处理 {year} 年 ===")
+                      detail_url = search_detail_url(driver, year)
+                      if not detail_url:
+                          print(f"  跳过 {year} 年（未发布或搜索不到）")
+                          continue
+                      text = fetch_detail(year, detail_url)
+                      if not text:
+                          print(f"  跳过 {year} 年（无法获取详情）")
+                          continue
+                      holidays = parse_holiday_text(year, text)
+                      if holidays:
+                          all_data.append({
+                              "y": year,
+                              "h": holidays
+                          })
+                          print(f"  成功解析 {len(holidays)} 个节日")
+                      else:
+                          print(f"  未解析到任何节日")
+              finally:
+                  driver.quit()
+              
               all_data.sort(key=lambda x: x['y'])
               with open('holiday_xiao.json', 'w', encoding='utf-8') as f:
                   json.dump(all_data, f, ensure_ascii=False, indent=2)
