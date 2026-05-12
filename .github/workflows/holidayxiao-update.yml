@@ -4,9 +4,10 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '.github/workflows/holidayxiao-update.yml'   # 仅此文件变更时触发
+      - '.github/workflows/holidayxiao-update.yml'
   schedule:
-    - cron: '0 5 5,15,25 * *'       # UTC 05:00 -> 北京时间 13:00
+    # 每月 5、15、25 日 UTC 13:00（北京时间 21:00）
+    - cron: '0 13 5,15,25 * *'
   workflow_dispatch:
 
 permissions:
@@ -16,17 +17,17 @@ jobs:
   update-holiday:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取仓库代码
+      - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: 安装依赖
+      - name: 2. 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml
 
-      - name: 抓取并生成节假日 JSON
+      - name: 3. 抓取国务院放假通知并生成 JSON
         run: |
           cat > fetch_holiday.py << 'PYEOF'
           import requests
@@ -56,28 +57,25 @@ jobs:
               return resp.text
 
           def extract_notice_blocks(html):
-              """返回 {year: full_text} 的字典（每个年份只保留第一个有效通知）"""
+              """返回 {year: full_text} 字典，每个年份仅保留第一个有效通知"""
               soup = BeautifulSoup(html, "lxml")
               full_text = soup.get_text("\n", strip=True)
-              # 找到所有“国务院办公厅关于XXXX年部分节假日安排的通知”的位置
               pattern = re.compile(r"国务院办公厅关于(\d{4})年部分节假日安排的通知")
               matches = list(pattern.finditer(full_text))
               blocks = {}
               for i, m in enumerate(matches):
                   year = int(m.group(1))
                   start = m.start()
-                  # 下一个通知的起始位置，若没有则到文本末尾
                   end = matches[i+1].start() if i+1 < len(matches) else len(full_text)
                   block_text = full_text[start:end]
-                  # 必须包含详细假期描述，过滤掉“图表”“图解”等摘要
-                  if "一、元旦" in block_text or "一、元旦" in block_text:
+                  # 必须包含详细假期段落才视为有效通知
+                  if "一、元旦" in block_text:
                       if year not in blocks:
                           blocks[year] = block_text
               return blocks
 
           def parse_single_notice(text, year):
-              """解析单一年份的放假通知文本，返回假期对象列表"""
-              # 分割出每个假期的段落
+              """解析单一年份的放假文本，返回假期列表"""
               part_pattern = re.compile(
                   r"([一二三四五六七]、\s*(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)[：:]\s*)(.*?)(?=[一二三四五六七]、\s*(?:元旦|春节|清明节|劳动节|端午节|中秋节|国庆节)|$)",
                   re.DOTALL
@@ -91,22 +89,22 @@ jobs:
                   off = []
                   work = []
 
-                  # 1. 提取放假区间（“X月Y日至Z月W日”或“X月Y日至Z日”）
+                  # 1. 放假区间（跨月或同月）
                   range_pat = re.compile(
                       r"(\d{1,2})月(\d{1,2})日[至到\-~]+(?:(\d{1,2})月)?(\d{1,2})日"
                   )
                   for m in range_pat.finditer(detail):
                       m1, d1 = int(m.group(1)), int(m.group(2))
-                      if m.group(3):  # 跨月
+                      if m.group(3):
                           m2, d2 = int(m.group(3)), int(m.group(4))
-                      else:           # 当月跨日
+                      else:
                           m2, d2 = m1, int(m.group(4))
                       off.append([
                           f"{year:04d}-{m1:02d}-{d1:02d}",
                           f"{year:04d}-{m2:02d}-{d2:02d}"
                       ])
 
-                  # 2. 如果没找到区间，尝试单日放假（如“1月1日放假，与周末连休”）
+                  # 2. 单日放假（如元旦）
                   if not off:
                       single = re.search(r"(\d{1,2})月(\d{1,2})日.*?放假", detail)
                       if single:
@@ -116,12 +114,11 @@ jobs:
                               f"{year:04d}-{m:02d}-{d:02d}"
                           ])
 
-                  # 3. 提取上班日期（“X月X日上班”或“X月X日（...）上班”）
+                  # 3. 上班日期
                   work_pat = re.compile(r"(\d{1,2})月(\d{1,2})日[（(][^）)]*[）)]?上班")
                   for m in work_pat.finditer(detail):
-                      m_, d_ = int(m.group(1)), int(m.group(2))
-                      date_str = f"{year:04d}-{m_:02d}-{d_:02d}"
-                      # 上班日期可能有重叠，去重
+                      mo, day = int(m.group(1)), int(m.group(2))
+                      date_str = f"{year:04d}-{mo:02d}-{day:02d}"
                       if date_str not in work:
                           work.append(date_str)
 
@@ -132,39 +129,57 @@ jobs:
 
               return holidays
 
+          def filter_december_only(holidays):
+              """仅保留涉及12月的假期"""
+              dec_holidays = []
+              for h in holidays:
+                  # 检查放假区间是否包含12月（日期格式："YYYY-MM-DD"）
+                  has_dec = any("-12-" in date for off_pair in h["off"] for date in off_pair)
+                  if has_dec:
+                      dec_holidays.append(h)
+              return dec_holidays
+
           def main():
-              print("抓取中国政府网放假通知...")
+              print("开始抓取国务院放假通知...")
               html = get_search_page()
               blocks = extract_notice_blocks(html)
               current_year = datetime.now().year
-              target_years = [current_year, current_year + 1]
+              # 目标年份：去年（仅12月）、今年、明年
+              target_years = [current_year - 1, current_year, current_year + 1]
               results = []
 
               for year in target_years:
-                  if year in blocks:
-                      print(f"处理 {year} 年...")
-                      holidays = parse_single_notice(blocks[year], year)
-                      if holidays:
-                          results.append({"y": year, "h": holidays})
-                      else:
-                          print(f"⚠️ {year} 年解析失败，跳过")
-                  else:
-                      print(f"⚠️ 未找到 {year} 年放假通知")
+                  if year not in blocks:
+                      print(f"未找到 {year} 年放假通知")
+                      continue
+                  print(f"处理 {year} 年...")
+                  holidays = parse_single_notice(blocks[year], year)
+                  if not holidays:
+                      print(f"警告：{year} 年解析失败")
+                      continue
+
+                  # 对去年进行特殊处理：只保留12月的假期
+                  if year == current_year - 1:
+                      holidays = filter_december_only(holidays)
+                      if not holidays:
+                          print(f"{year} 年没有12月的假期，跳过")
+                          continue
+                      print(f"保留 {year} 年12月假期：{', '.join(h['n'] for h in holidays)}")
+
+                  results.append({"y": year, "h": holidays})
 
               if not results:
-                  print("❌ 未提取到任何年份的放假安排，任务终止。")
+                  print("错误：没有抓取到任何年份数据，不生成文件。")
                   return
 
-              # 按年份排序（先当前年，再下一年）
               results.sort(key=lambda x: x["y"])
 
-              # 写入 JSON 文件（覆盖）
+              # 写入 holiday_xiao.json
               output_path = "holiday_xiao.json"
               with open(output_path, "w", encoding="utf-8") as f:
                   json.dump(results, f, ensure_ascii=False, indent=2)
 
-              print(f"✅ 已生成 {output_path}，包含 {len(results)} 个年份。")
-              # 更新元信息并重写（加入更新时间）
+              # 写入元信息
               meta = {
                   "last_updated": beijing_now().isoformat(),
                   "source": "Gov.cn search",
@@ -177,20 +192,29 @@ jobs:
                   json.dump(data, f, ensure_ascii=False, indent=2)
                   f.truncate()
 
+              print(f"✅ 成功生成 {output_path}，包含年份：{meta['years']}")
+
           if __name__ == "__main__":
               main()
           PYEOF
           python3 fetch_holiday.py
 
-      - name: 提交更新
+      - name: 4. 检查生成的文件
         run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
+          ls -lh holiday_xiao.json
+          echo "文件内容预览（前20行）："
+          head -20 holiday_xiao.json
+
+      - name: 5. 提交更新到仓库
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
           git add holiday_xiao.json
           if git diff --staged --quiet; then
             echo "数据无变化，跳过提交"
           else
-            TIME_NOW=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
-            git commit -m "🤖 更新节假日安排 [${TIME_NOW} 北京时间]"
-            git push
+            BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
+            git commit -m "🤖 自动更新节假日安排 [${BEIJING_TIME} 北京时间]"
+            git push origin HEAD:main
+            echo "✅ 更新已推送"
           fi
