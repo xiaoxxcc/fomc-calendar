@@ -53,7 +53,6 @@ jobs:
               return f"{year:04d}-{month:02d}-{day:02d}"
 
           def parse_holiday_text(year: int, text: str):
-              """解析节假日文本，返回节日列表，无 work 时不包含该字段"""
               holidays = []
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
@@ -74,7 +73,7 @@ jobs:
                   else:
                       off_text = content
                       work_text = ""
-
+                  
                   off_dates = re.findall(r'(\d{1,2})月(\d{1,2})日', off_text)
                   if off_dates:
                       to_match = re.search(r'(\d{1,2})月(\d{1,2})日(?:.*?)至(?:.*?)(\d{1,2})月(\d{1,2})日', off_text)
@@ -84,16 +83,16 @@ jobs:
                       else:
                           for m, d in off_dates:
                               off_list.append([get_full_date(year, int(m), int(d)), get_full_date(year, int(m), int(d))])
-
+                  
                   work_dates = re.findall(r'(\d{1,2})月(\d{1,2})日', work_text)
                   for m, d in work_dates:
                       work_list.append(get_full_date(year, int(m), int(d)))
-
-                  # 构建节日对象，无 work 时不添加该字段
-                  holiday_obj = {"n": name, "off": off_list}
-                  if work_list:
-                      holiday_obj["work"] = work_list
-                  holidays.append(holiday_obj)
+                  
+                  holidays.append({
+                      "n": name,
+                      "off": off_list,
+                      "work": work_list
+                  })
               return holidays
 
           def search_detail_url(driver, year: int):
@@ -145,6 +144,7 @@ jobs:
               """只保留12月的假期，若没有则返回空列表"""
               filtered = []
               for h in holidays:
+                  # 检查放假区间是否包含12月
                   has_dec = False
                   for start, end in h['off']:
                       if f'{year}-12-' in start or f'{year}-12-' in end:
@@ -162,11 +162,11 @@ jobs:
               chrome_options.add_argument("--disable-gpu")
               chrome_options.add_argument("--window-size=1920,1080")
               chrome_options.add_argument(f"user-agent={HEADERS['User-Agent']}")
-
+              
               current_year = datetime.now().year
               years_to_fetch = [current_year - 1, current_year, current_year + 1]
               all_data = []
-
+              
               driver = webdriver.Chrome(options=chrome_options)
               try:
                   for year in years_to_fetch:
@@ -183,7 +183,7 @@ jobs:
                       if not holidays:
                           print(f"  未解析到任何节日")
                           continue
-
+                      
                       # 上一年特殊处理：只保留12月假期
                       if year == current_year - 1:
                           print("  过滤上一年数据，仅保留12月假日")
@@ -191,7 +191,7 @@ jobs:
                           if not holidays:
                               print("  12月无假期数据，跳过该年份")
                               continue
-
+                      
                       all_data.append({
                           "y": year,
                           "h": holidays
@@ -199,7 +199,7 @@ jobs:
                       print(f"  成功解析 {len(holidays)} 个节日")
               finally:
                   driver.quit()
-
+              
               all_data.sort(key=lambda x: x['y'])
               with open('holiday_xiao.json', 'w', encoding='utf-8') as f:
                   json.dump(all_data, f, ensure_ascii=False, indent=2)
