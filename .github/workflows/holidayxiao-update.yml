@@ -298,7 +298,7 @@ jobs:
                   chrome_options.binary_location = chrome_bin
 
               current_year = datetime.now().year
-              # 常规动态抓取近三年（如需固定年份可改为 range(2020, 2027)）
+              # 常规动态抓取近三年（如需固定年份可改为 range(2023, 2024)）
               years_to_fetch = list(range(2020, 2027))
               raw_data = []
 
