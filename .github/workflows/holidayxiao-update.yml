@@ -7,7 +7,7 @@ on:
       - '.github/workflows/holidayxiao-update.yml'
   schedule:
     # 北京时间每月5、15、25日 13:00 → UTC 05:00
-    - cron: '0 5 5,15,25 * *'
+    - cron: '0 13 5,15,25 * *'
   workflow_dispatch:
 
 permissions:
@@ -53,59 +53,70 @@ jobs:
               return f"{year:04d}-{month:02d}-{day:02d}"
 
           def parse_holiday_text(year: int, text: str):
-              """精准解析节假日文本，支持有/无调休、单日/区间、联合节日"""
+              """
+              解析节假日通知文本，支持：
+              - 单日假期（放假1天，不调休）
+              - 跨日/跨月区间（2月15日至23日、10月1日至8日）
+              - 联合节日名称（国庆节、中秋节）
+              - 有/无调休补班
+              返回格式：
+                  [
+                    {"n": "节日名", "off": [["开始","结束"]], "work": ["日期1"]},
+                    ...
+                  ]
+              """
               holidays = []
+              # 按序号分割（一、二、... 或 1、2、...）
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
-                  if not block.strip():
+                  block = block.strip()
+                  if not block:
                       continue
-                  match_name = re.match(r'(?:[一二三四五六七八九十]+|\d+)、(.+?)：', block)
-                  if not match_name:
-                      continue
-                  name = match_name.group(1).strip()
-                  content = block[match_name.end():].strip()
 
-                  # 1. 提取放假日期区间（仅从含“放假”且不含“上班”的分句中取）
+                  # 提取名称：序号、名称： 例如 "一、元旦：" 或 "六、国庆节、中秋节："
+                  name_match = re.match(r'(?:[一二三四五六七八九十]+|\d+)、(.+?)：', block)
+                  if not name_match:
+                      continue
+                  name = name_match.group(1).strip()
+                  # 正文（冒号之后的内容）
+                  body = block[name_match.end():].strip()
+
+                  # ----- 1. 放假日期区间 -----
                   off_list = []
-                  # 按句号或分号分割，找出放假相关句子
-                  sentences = re.split(r'[。；]', content)
-                  holiday_sentence = ''
-                  for s in sentences:
-                      if '放假' in s and '上班' not in s:
-                          holiday_sentence = s.strip()
-                          break
-                  if not holiday_sentence:
-                      # 若找不到，使用整个 content（兼容简单格式）
-                      holiday_sentence = content
-
-                  # 尝试跨月区间：X月X日至Y月Z日
-                  cross_month = re.search(r'(\d{1,2})月(\d{1,2})日\s*至\s*(\d{1,2})月(\d{1,2})日', holiday_sentence)
-                  if cross_month:
-                      m1, d1, m2, d2 = map(int, cross_month.groups())
+                  # 优先匹配 "X月X日...至...X月X日" （跨月或同月均可）
+                  range_full = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日', body)
+                  if range_full:
+                      m1, d1, m2, d2 = map(int, range_full.groups())
                       off_list.append([get_full_date(year, m1, d1), get_full_date(year, m2, d2)])
                   else:
-                      # 尝试同月区间：X月X日至X日（月份省略）
-                      same_month = re.search(r'(\d{1,2})月(\d{1,2})日\s*至\s*(\d{1,2})日', holiday_sentence)
-                      if same_month:
-                          m, d1, d2 = int(same_month.group(1)), int(same_month.group(2)), int(same_month.group(3))
-                          off_list.append([get_full_date(year, m, d1), get_full_date(year, m, d2)])
+                      # 匹配省略结束月份的 "X月X日至X日"
+                      range_omit = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})日', body)
+                      if range_omit:
+                          m1, d1, d2 = map(int, range_omit.groups())
+                          off_list.append([get_full_date(year, m1, d1), get_full_date(year, m1, d2)])
                       else:
-                          # 单日：X月X日
-                          single = re.search(r'(\d{1,2})月(\d{1,2})日', holiday_sentence)
+                          # 单日假期（"放假1天" 或 只有日期）
+                          single = re.search(r'(\d{1,2})月(\d{1,2})日', body)
                           if single:
-                              m, d = int(single.group(1)), int(single.group(2))
+                              m, d = map(int, single.groups())
                               off_list.append([get_full_date(year, m, d), get_full_date(year, m, d)])
 
-                  # 2. 提取上班日期（从全文提取，排除放假区间内的日期）
-                  work_dates = []
-                  for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日(?=[^。]*上班)', content):
-                      work_dates.append(get_full_date(year, int(m), int(d)))
-                  work_dates = sorted(set(work_dates))
+                  # ----- 2. 补班/上班日期 -----
+                  work_dates = set()
+                  # 找到所有包含“上班”的句子，提取其中的月日
+                  for sentence in re.split(r'[。；]', body):
+                      if '上班' in sentence:
+                          # 排除掉类似“放假1天，不调休”这种没有补班的句子
+                          for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日', sentence):
+                              work_dates.add(get_full_date(year, int(m), int(d)))
+                  work_dates = sorted(work_dates)
 
-                  holiday_obj = {"n": name, "off": off_list}
-                  if work_dates:
-                      holiday_obj["work"] = work_dates
-                  holidays.append(holiday_obj)
+                  # ----- 3. 组装结果 -----
+                  item = {"n": name, "off": off_list}
+                  if work_dates:          # 有补班才添加 work 字段
+                      item["work"] = work_dates
+                  holidays.append(item)
+
               return holidays
 
           def search_detail_url(driver, year: int):
@@ -154,7 +165,7 @@ jobs:
               return content_div.get_text()
 
           def filter_december_holidays(holidays, year):
-              """只保留12月的假期"""
+              """只保留12月的假期（用于上一年度通知）"""
               filtered = []
               for h in holidays:
                   has_dec = False
