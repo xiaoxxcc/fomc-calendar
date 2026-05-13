@@ -6,7 +6,6 @@ on:
     paths:
       - '.github/workflows/holidayxiao-update.yml'
   schedule:
-    # 北京时间每月5、15、25日 21:00 (UTC 13:00)
     - cron: '0 13 5,15,25 * *'
   workflow_dispatch:
 
@@ -27,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 selenium lxml
 
-      - name: 2.5 Setup Chrome (browser and driver)
+      - name: 2.5 Setup Chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: 'stable'
@@ -57,11 +56,24 @@ jobs:
               'Accept-Language': 'zh-CN,zh;q=0.9',
           }
 
+          def _normalize_numbers(text: str) -> str:
+              """将全角数字替换为半角数字，确保正则匹配"""
+              full_to_half = {
+                  '０': '0', '１': '1', '２': '2', '３': '3', '４': '4',
+                  '５': '5', '６': '6', '７': '7', '８': '8', '９': '9'
+              }
+              for full, half in full_to_half.items():
+                  text = text.replace(full, half)
+              return text
+
           def get_full_date(year: int, month: int, day: int) -> str:
               return f"{year:04d}-{month:02d}-{day:02d}"
 
           def parse_holiday_text(year: int, text: str):
-              """按句子分析，放假与补班严格分离，避免日期错乱"""
+              """
+              兼容全角数字，按节日段落分别提取放假区间和补班日期。
+              """
+              text = _normalize_numbers(text)  # 归一化
               holidays = []
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
@@ -74,30 +86,43 @@ jobs:
                   name = name_match.group(1).strip()
                   body = block[name_match.end():].strip()
 
-                  sentences = re.split(r'[。；]', body)
                   off_dates = []
                   work_dates = set()
 
-                  for sent in sentences:
-                      sent = sent.strip()
-                      if not sent:
+                  # 提取补班日（上班句子）
+                  work_sents = re.findall(r'[^。；]*(?:上班)[^。；]*', body)
+                  for ws in work_sents:
+                      for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日', ws):
+                          work_dates.add(get_full_date(year, int(m), int(d)))
+
+                  # 提取放假区间（放假/休假句子）
+                  off_sents = re.findall(r'[^。；]*(?:放假|休假)[^。；]*', body)
+                  for osent in off_sents:
+                      # 1. 跨月区间：X月X日...至...X月X日
+                      cross = re.search(
+                          r'(\d{1,2})月(\d{1,2})日(?:[^月]*?)至(?:[^月]*?)(\d{1,2})月(\d{1,2})日',
+                          osent
+                      )
+                      if cross:
+                          m1, d1, m2, d2 = map(int, cross.groups())
+                          off_dates.append([get_full_date(year, m1, d1), get_full_date(year, m2, d2)])
                           continue
-                      if '上班' in sent:
-                          for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日', sent):
-                              work_dates.add(get_full_date(year, int(m), int(d)))
-                      elif '放假' in sent or '休假' in sent:
-                          cross = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日', sent)
-                          same = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})日', sent)
-                          single = re.search(r'(\d{1,2})月(\d{1,2})日', sent)
-                          if cross:
-                              m1, d1, m2, d2 = map(int, cross.groups())
-                              off_dates.append([get_full_date(year, m1, d1), get_full_date(year, m2, d2)])
-                          elif same:
-                              m1, d1, d2 = map(int, same.groups())
-                              off_dates.append([get_full_date(year, m1, d1), get_full_date(year, m1, d2)])
-                          elif single:
-                              m, d = map(int, single.groups())
-                              off_dates.append([get_full_date(year, m, d), get_full_date(year, m, d)])
+
+                      # 2. 同月区间：X月X日至X日
+                      same = re.search(
+                          r'(\d{1,2})月(\d{1,2})日(?:[^月]*?)至(?:[^月]*?)(\d{1,2})日',
+                          osent
+                      )
+                      if same:
+                          m1, d1, d2 = map(int, same.groups())
+                          off_dates.append([get_full_date(year, m1, d1), get_full_date(year, m1, d2)])
+                          continue
+
+                      # 3. 单日假期（取第一个月日组合）
+                      single = re.search(r'(\d{1,2})月(\d{1,2})日', osent)
+                      if single:
+                          m, d = map(int, single.groups())
+                          off_dates.append([get_full_date(year, m, d), get_full_date(year, m, d)])
 
                   item = {"n": name, "off": off_dates}
                   if work_dates:
@@ -135,7 +160,6 @@ jobs:
               return target_url
 
           def fetch_detail(year: int, url: str):
-              """只返回页面文本，无需保存快照"""
               print(f"  详情页: {url}")
               try:
                   resp = requests.get(url, headers=HEADERS, timeout=20)
@@ -213,9 +237,7 @@ jobs:
       - name: 4. Show generated file
         run: |
           if [ -f holiday_xiao.json ]; then
-            echo "=== holiday_xiao.json 内容预览 ==="
             python3 -m json.tool holiday_xiao.json | head -30
-            echo "=== 数据年份: ==="
             python3 -c "import json; data=json.load(open('holiday_xiao.json')); print([d['y'] for d in data])"
           else
             echo "错误: holiday_xiao.json 未生成"
