@@ -18,9 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 1. Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+        uses: actions/checkout@v6      # 升级至 v6，原生支持 Node.js 24
 
       - name: 2. Setup Python and install dependencies
         run: |
@@ -28,7 +26,7 @@ jobs:
           pip install requests beautifulsoup4 selenium lxml
 
       - name: 2.5 Setup Chrome
-        uses: browser-actions/setup-chrome@v1
+        uses: browser-actions/setup-chrome@v2.1.1   # 升级至 v2.1.1，支持 Node.js 24
         with:
           chrome-version: 'stable'
 
@@ -98,7 +96,7 @@ jobs:
                   # 补班日期提取（上班句子）
                   work_sents = re.findall(r'[^。；]*(?:上班)[^。；]*', body)
                   for ws in work_sents:
-                      # 日期前可能有年份，但补班通常没有跨年，我们用默认年份
+                      # 日期前可能有年份，补班通常没有跨年，我们用默认年份
                       for y, m, d in re.findall(r'(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日', ws):
                           work_year = int(y) if y else year
                           work_dates.add(f"{work_year:04d}-{int(m):02d}-{int(d):02d}")
