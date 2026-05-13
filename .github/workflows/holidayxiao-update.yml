@@ -49,7 +49,6 @@ jobs:
           import time
           import os
           from datetime import datetime
-          from collections import defaultdict
 
           SEARCH_URL_TEMPLATE = "https://sousuo.www.gov.cn/sousuo/search.shtml?code=17da70961a7&searchWord={year}年部分节假日安排的通知"
           HEADERS = {
@@ -74,18 +73,13 @@ jobs:
               text = re.sub(r'\([^)]*\)', '', text)
               return text
 
-          def _remove_year_prefix(text: str) -> str:
-              """删除四位数字年份前缀，例如“2022年”"""
-              return re.sub(r'\d{4}年', '', text)
-
           def parse_holiday_text(year: int, text: str):
               """
-              解析节假日通知文本，返回节日列表。
-              日期格式为“MM-DD”，允许跨年区间保留原始信息。
+              解析节假日通知，支持日期前嵌入的年份（如“2022年12月31日”），
+              正确生成完整日期格式 YYYY-MM-DD。
               """
               text = _normalize_numbers(text)
               text = _remove_brackets(text)
-              text = _remove_year_prefix(text)
               holidays = []
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
@@ -100,32 +94,54 @@ jobs:
 
                   off_dates = []
                   work_dates = set()
-                  # 补班句子
+
+                  # 补班日期提取（上班句子）
                   work_sents = re.findall(r'[^。；]*(?:上班)[^。；]*', body)
                   for ws in work_sents:
-                      for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日', ws):
-                          work_dates.add(f"{int(m):02d}-{int(d):02d}")
+                      # 日期前可能有年份，但补班通常没有跨年，我们用默认年份
+                      for y, m, d in re.findall(r'(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日', ws):
+                          work_year = int(y) if y else year
+                          work_dates.add(f"{work_year:04d}-{int(m):02d}-{int(d):02d}")
 
-                  # 放假句子
+                  # 放假区间提取（放假/休假句子）
                   off_sents = re.findall(r'[^。；]*(?:放假|休假)[^。；]*', body)
                   for osent in off_sents:
-                      # 跨月区间：X月X日...至...X月X日（可处理跨年）
-                      cross = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日', osent)
+                      # 跨月区间（可能带年份）
+                      cross = re.search(
+                          r'(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日.*?至.*?(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日',
+                          osent
+                      )
                       if cross:
-                          m1, d1, m2, d2 = map(int, cross.groups())
-                          off_dates.append([f"{m1:02d}-{d1:02d}", f"{m2:02d}-{d2:02d}"])
+                          y1, m1, d1, y2, m2, d2 = cross.groups()
+                          start_year = int(y1) if y1 else year
+                          end_year = int(y2) if y2 else year
+                          off_dates.append([
+                              f"{start_year:04d}-{int(m1):02d}-{int(d1):02d}",
+                              f"{end_year:04d}-{int(m2):02d}-{int(d2):02d}"
+                          ])
                           continue
-                      # 同月区间：X月X日至X日
-                      same = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})日', osent)
+                      # 同月区间（可能带年份）
+                      same = re.search(
+                          r'(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})日',
+                          osent
+                      )
                       if same:
-                          m1, d1, d2 = map(int, same.groups())
-                          off_dates.append([f"{m1:02d}-{d1:02d}", f"{m1:02d}-{d2:02d}"])
+                          y, m1, d1, d2 = same.groups()
+                          use_year = int(y) if y else year
+                          off_dates.append([
+                              f"{use_year:04d}-{int(m1):02d}-{int(d1):02d}",
+                              f"{use_year:04d}-{int(m1):02d}-{int(d2):02d}"
+                          ])
                           continue
                       # 单日假期
-                      single = re.search(r'(\d{1,2})月(\d{1,2})日', osent)
+                      single = re.search(r'(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日', osent)
                       if single:
-                          m, d = map(int, single.groups())
-                          off_dates.append([f"{m:02d}-{d:02d}", f"{m:02d}-{d:02d}"])
+                          y, m, d = single.groups()
+                          use_year = int(y) if y else year
+                          off_dates.append([
+                              f"{use_year:04d}-{int(m):02d}-{int(d):02d}",
+                              f"{use_year:04d}-{int(m):02d}-{int(d):02d}"
+                          ])
 
                   item = {"n": name, "off": off_dates}
                   if work_dates:
@@ -177,90 +193,14 @@ jobs:
               return content_div.get_text() if content_div else soup.get_text()
 
           def filter_december_holidays(holidays, year):
-              """保留含有12月假期的节假日（用于上一年通知）"""
               filtered = []
               for h in holidays:
-                  if any(date.startswith('12-') for pair in h['off'] for date in pair):
+                  has_dec = any(f'{year}-12-' in d for pair in h['off'] for d in pair)
+                  if has_dec:
                       filtered.append(h)
               return filtered
 
-          def postprocess_cross_year(all_data):
-              """
-              拆分跨年假期区间：
-              - 若某年的节日区间跨年（开始月份 > 结束月份），
-                则将开始日期所属部分划入前一年，结束部分留在当年。
-              - 合并同一年份中相同节日名称的 off 和 work 数组。
-              """
-              # 使用字典方便合并
-              year_dict = {}
-              for entry in all_data:
-                  y = entry["y"]
-                  if y not in year_dict:
-                      year_dict[y] = []
-                  year_dict[y].extend(entry["h"])
-
-              new_year_dict = defaultdict(list)
-
-              for year, holidays in year_dict.items():
-                  for holiday in holidays:
-                      name = holiday["n"]
-                      off_list = holiday.get("off", [])
-                      work = holiday.get("work", [])
-
-                      new_offs = []
-                      for start, end in off_list:
-                          start_m = int(start[:2])
-                          end_m = int(end[:2])
-                          # 判断是否跨年（月份递减）
-                          if start_m > end_m:
-                              # 拆分为前一年和当年
-                              prev_year = year - 1
-                              # 前一年部分：从 start 到 12-31
-                              prev_off = [start, "12-31"]
-                              # 当年部分：从 01-01 到 end
-                              curr_off = ["01-01", end]
-
-                              # 加入前一年数据
-                              existing = next((h for h in new_year_dict[prev_year] if h["n"] == name), None)
-                              if existing:
-                                  existing_offs = [tuple(o) for o in existing["off"]]
-                                  if tuple(prev_off) not in existing_offs:
-                                      existing["off"].append(prev_off)
-                              else:
-                                  new_year_dict[prev_year].append({
-                                      "n": name,
-                                      "off": [prev_off]
-                                  })
-
-                              # 当年部分保留
-                              new_offs.append(curr_off)
-                          else:
-                              new_offs.append([start, end])
-
-                      # 更新当前年的本节日
-                      existing_curr = next((h for h in new_year_dict[year] if h["n"] == name), None)
-                      if existing_curr:
-                          for off in new_offs:
-                              if off not in existing_curr["off"]:
-                                  existing_curr["off"].append(off)
-                          if work:
-                              existing_works = set(existing_curr.get("work", []))
-                              existing_works.update(work)
-                              existing_curr["work"] = sorted(existing_works)
-                      else:
-                          new_holiday = {"n": name, "off": new_offs}
-                          if work:
-                              new_holiday["work"] = sorted(work)
-                          new_year_dict[year].append(new_holiday)
-
-              # 转回列表格式并排序
-              result = []
-              for year in sorted(new_year_dict.keys()):
-                  result.append({"y": year, "h": new_year_dict[year]})
-              return result
-
           def format_json_compact(obj, indent=0, is_top=True):
-              """自定义紧凑JSON输出，普通数组自动单行"""
               if isinstance(obj, dict):
                   if not obj:
                       return '{}'
@@ -298,9 +238,8 @@ jobs:
                   chrome_options.binary_location = chrome_bin
 
               current_year = datetime.now().year
-              # 常规动态抓取近三年（如需固定年份可改为 range(2023, 2025)）
-              years_to_fetch = list(range(2020, 2027))
-              raw_data = []
+              years_to_fetch = list(range(2022, 2025))
+              all_data = []
 
               driver = webdriver.Chrome(options=chrome_options)
               try:
@@ -318,21 +257,17 @@ jobs:
                       if not holidays:
                           print(f"  未解析到任何节日")
                           continue
-                      # 动态抓取时保留上一年12月假期过滤
                       if year == current_year - 1:
                           holidays = filter_december_holidays(holidays, year)
                           if not holidays:
                               print("  12月无假期数据，跳过该年份")
                               continue
-                      raw_data.append({"y": year, "h": holidays})
+                      all_data.append({"y": year, "h": holidays})
                       print(f"  成功解析 {len(holidays)} 个节日")
               finally:
                   driver.quit()
 
-              # 后处理：拆分跨年区间
-              all_data = postprocess_cross_year(raw_data)
               all_data.sort(key=lambda x: x['y'])
-
               with open('holiday_xiao.json', 'w', encoding='utf-8') as f:
                   f.write(format_json_compact(all_data, 0))
               print(f"\n已生成 holiday_xiao.json，包含 {len(all_data)} 年数据")
