@@ -299,7 +299,7 @@ jobs:
 
               current_year = datetime.now().year
               # 常规动态抓取近三年（如需固定年份可改为 range(2020, 2027)）
-              years_to_fetch = [current_year - 1, current_year, current_year + 1]
+              years_to_fetch = list(range(2020, 2027))
               raw_data = []
 
               driver = webdriver.Chrome(options=chrome_options)
