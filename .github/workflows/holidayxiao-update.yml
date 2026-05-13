@@ -6,7 +6,7 @@ on:
     paths:
       - '.github/workflows/holidayxiao-update.yml'
   schedule:
-    # 北京时间每月5、15、25日 13:00 → UTC 05:00
+    # 北京时间每月5、15、25日 21:00 (对应UTC 13:00)
     - cron: '0 13 5,15,25 * *'
   workflow_dispatch:
 
@@ -27,19 +27,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 selenium lxml
 
+      - name: 2.5 Setup Chrome (browser and driver)
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: 'stable'
+
       - name: 3. Fetch holiday data and generate JSON
+        env:
+          CHROME_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: |
           cat > fetch_holiday.py << 'PYEOF'
           import requests
           from bs4 import BeautifulSoup
           from selenium import webdriver
           from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.chrome.service import Service
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait
           from selenium.webdriver.support import expected_conditions as EC
           import json
           import re
           import time
+          import os
           from datetime import datetime
 
           SEARCH_URL_TEMPLATE = "https://sousuo.www.gov.cn/sousuo/search.shtml?code=17da70961a7&searchWord={year}年部分节假日安排的通知"
@@ -53,70 +62,54 @@ jobs:
               return f"{year:04d}-{month:02d}-{day:02d}"
 
           def parse_holiday_text(year: int, text: str):
-              """
-              解析节假日通知文本，支持：
-              - 单日假期（放假1天，不调休）
-              - 跨日/跨月区间（2月15日至23日、10月1日至8日）
-              - 联合节日名称（国庆节、中秋节）
-              - 有/无调休补班
-              返回格式：
-                  [
-                    {"n": "节日名", "off": [["开始","结束"]], "work": ["日期1"]},
-                    ...
-                  ]
-              """
               holidays = []
-              # 按序号分割（一、二、... 或 1、2、...）
+              # 按序号分割成一、二、… 或 1、2、…
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
                   block = block.strip()
                   if not block:
                       continue
 
-                  # 提取名称：序号、名称： 例如 "一、元旦：" 或 "六、国庆节、中秋节："
+                  # 提取名称：序号、名称：
                   name_match = re.match(r'(?:[一二三四五六七八九十]+|\d+)、(.+?)：', block)
                   if not name_match:
                       continue
                   name = name_match.group(1).strip()
-                  # 正文（冒号之后的内容）
                   body = block[name_match.end():].strip()
 
-                  # ----- 1. 放假日期区间 -----
+                  # ----- 1. 放假区间提取 -----
                   off_list = []
-                  # 优先匹配 "X月X日...至...X月X日" （跨月或同月均可）
+                  # 跨月区间: "X月X日...至...X月X日"
                   range_full = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日', body)
                   if range_full:
                       m1, d1, m2, d2 = map(int, range_full.groups())
                       off_list.append([get_full_date(year, m1, d1), get_full_date(year, m2, d2)])
                   else:
-                      # 匹配省略结束月份的 "X月X日至X日"
+                      # 同月省略月份: "X月X日至X日"
                       range_omit = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})日', body)
                       if range_omit:
                           m1, d1, d2 = map(int, range_omit.groups())
                           off_list.append([get_full_date(year, m1, d1), get_full_date(year, m1, d2)])
                       else:
-                          # 单日假期（"放假1天" 或 只有日期）
+                          # 单日假期: "放假1天"
                           single = re.search(r'(\d{1,2})月(\d{1,2})日', body)
                           if single:
                               m, d = map(int, single.groups())
                               off_list.append([get_full_date(year, m, d), get_full_date(year, m, d)])
 
-                  # ----- 2. 补班/上班日期 -----
+                  # ----- 2. 补班日期提取 -----
                   work_dates = set()
-                  # 找到所有包含“上班”的句子，提取其中的月日
                   for sentence in re.split(r'[。；]', body):
                       if '上班' in sentence:
-                          # 排除掉类似“放假1天，不调休”这种没有补班的句子
                           for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日', sentence):
                               work_dates.add(get_full_date(year, int(m), int(d)))
                   work_dates = sorted(work_dates)
 
-                  # ----- 3. 组装结果 -----
+                  # ----- 3. 组装 -----
                   item = {"n": name, "off": off_list}
-                  if work_dates:          # 有补班才添加 work 字段
+                  if work_dates:
                       item["work"] = work_dates
                   holidays.append(item)
-
               return holidays
 
           def search_detail_url(driver, year: int):
@@ -185,6 +178,11 @@ jobs:
               chrome_options.add_argument("--disable-gpu")
               chrome_options.add_argument("--window-size=1920,1080")
               chrome_options.add_argument(f"user-agent={HEADERS['User-Agent']}")
+
+              # 使用环境变量指定的 chrome 二进制，适配 GitHub Actions
+              chrome_bin = os.environ.get("CHROME_BIN")
+              if chrome_bin:
+                  chrome_options.binary_location = chrome_bin
 
               current_year = datetime.now().year
               years_to_fetch = [current_year - 1, current_year, current_year + 1]
