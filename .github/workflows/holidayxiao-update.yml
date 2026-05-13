@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/holidayxiao-update.yml'
   schedule:
+    # 北京时间每月5、15、25日 21:00 (UTC 13:00)
     - cron: '0 13 5,15,25 * *'
   workflow_dispatch:
 
@@ -67,10 +68,8 @@ jobs:
               return text
 
           def _remove_brackets(text: str) -> str:
-              """删除所有中英文括号及内部内容，避免括号内文字干扰日期解析"""
-              # 去除中文括号 （...）
+              """删除所有中英文括号及内部内容"""
               text = re.sub(r'（[^）]*）', '', text)
-              # 去除英文括号 (...)
               text = re.sub(r'\([^)]*\)', '', text)
               return text
 
@@ -78,11 +77,8 @@ jobs:
               return f"{year:04d}-{month:02d}-{day:02d}"
 
           def parse_holiday_text(year: int, text: str):
-              """
-              解析节假日通知，去除括号干扰后按句子提取日期。
-              """
-              text = _normalize_numbers(text)   # 全角数字归一化
-              text = _remove_brackets(text)     # 删除所有括号内容
+              text = _normalize_numbers(text)
+              text = _remove_brackets(text)
               holidays = []
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
@@ -97,40 +93,27 @@ jobs:
 
                   off_dates = []
                   work_dates = set()
-
-                  # 补班句子（含“上班”）
                   work_sents = re.findall(r'[^。；]*(?:上班)[^。；]*', body)
                   for ws in work_sents:
                       for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日', ws):
                           work_dates.add(get_full_date(year, int(m), int(d)))
 
-                  # 放假句子（含“放假”或“休假”）
                   off_sents = re.findall(r'[^。；]*(?:放假|休假)[^。；]*', body)
                   for osent in off_sents:
-                      # 跨月区间：X月X日...至...X月X日
-                      cross = re.search(
-                          r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日',
-                          osent
-                      )
+                      cross = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日', osent)
                       if cross:
                           m1, d1, m2, d2 = map(int, cross.groups())
                           off_dates.append([get_full_date(year, m1, d1), get_full_date(year, m2, d2)])
                           continue
-                      # 同月区间：X月X日至X日
-                      same = re.search(
-                          r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})日',
-                          osent
-                      )
+                      same = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})日', osent)
                       if same:
                           m1, d1, d2 = map(int, same.groups())
                           off_dates.append([get_full_date(year, m1, d1), get_full_date(year, m1, d2)])
                           continue
-                      # 单日假期（取第一个月日组合）
                       single = re.search(r'(\d{1,2})月(\d{1,2})日', osent)
                       if single:
                           m, d = map(int, single.groups())
                           off_dates.append([get_full_date(year, m, d), get_full_date(year, m, d)])
-
                   item = {"n": name, "off": off_dates}
                   if work_dates:
                       item["work"] = sorted(work_dates)
@@ -188,6 +171,34 @@ jobs:
                       filtered.append(h)
               return filtered
 
+          def format_json_compact(obj, indent=0, is_top=True):
+              """自定义紧凑JSON输出，普通数组自动单行（尤其 off/work）"""
+              if isinstance(obj, dict):
+                  if not obj:
+                      return '{}'
+                  items = []
+                  for k, v in obj.items():
+                      key_str = json.dumps(k, ensure_ascii=False)
+                      val_str = format_json_compact(v, indent + 2, is_top=False)
+                      items.append(' ' * (indent + 2) + key_str + ': ' + val_str)
+                  return '{\n' + ',\n'.join(items) + '\n' + ' ' * indent + '}'
+              elif isinstance(obj, list):
+                  if not obj:
+                      return '[]'
+                  # 判断是否为“简单数组”（元素都是简单类型，或都是简单类型的列表）
+                  all_simple = all(isinstance(x, (str, int, float, bool, type(None))) for x in obj)
+                  all_simple_lists = all(isinstance(x, list) and all(isinstance(y, (str, int, float, bool, type(None))) for y in x) for x in obj)
+                  if all_simple or all_simple_lists:
+                      # 单行紧凑输出
+                      return json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
+                  else:
+                      items = []
+                      for v in obj:
+                          items.append(' ' * (indent + 2) + format_json_compact(v, indent + 2, is_top=False))
+                      return '[\n' + ',\n'.join(items) + '\n' + ' ' * indent + ']'
+              else:
+                  return json.dumps(obj, ensure_ascii=False)
+
           def main():
               chrome_options = Options()
               chrome_options.add_argument("--headless=new")
@@ -231,8 +242,9 @@ jobs:
                   driver.quit()
 
               all_data.sort(key=lambda x: x['y'])
+              # 使用紧凑格式化输出
               with open('holiday_xiao.json', 'w', encoding='utf-8') as f:
-                  json.dump(all_data, f, ensure_ascii=False, indent=2)
+                  f.write(format_json_compact(all_data, 0))
               print(f"\n已生成 holiday_xiao.json，包含 {len(all_data)} 年数据")
 
           if __name__ == '__main__':
