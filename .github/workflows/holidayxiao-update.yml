@@ -55,50 +55,34 @@ jobs:
           def parse_holiday_text(year: int, text: str):
               """精准解析节假日文本，支持有/无调休、单日/区间、联合节日"""
               holidays = []
-              # 按“一、”“二、”……或“1、”“2、”拆分
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
                   if not block.strip():
                       continue
-                  # 提取节日名称（去掉序号）
                   match_name = re.match(r'(?:[一二三四五六七八九十]+|\d+)、(.+?)：', block)
                   if not match_name:
                       continue
                   name = match_name.group(1).strip()
                   content = block[match_name.end():].strip()
 
-                  # 用“上班”关键词分割放假部分和调休部分
-                  work_positions = [m.start() for m in re.finditer(r'上班', content)]
-                  if work_positions:
-                      first_work = work_positions[0]
-                      off_text = content[:first_work]
-                      work_text = content[first_work:]
-                  else:
-                      off_text = content
-                      work_text = ""
-
-                  # ----- 提取放假日期（仅在 off_text 中）-----
+                  # 放假日期
                   off_list = []
-                  # 尝试匹配“至”区间（例如“1月28日至2月4日”）
-                  range_match = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日', off_text)
+                  range_match = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日', content)
                   if range_match:
                       m1, d1, m2, d2 = map(int, range_match.groups())
                       off_list.append([get_full_date(year, m1, d1), get_full_date(year, m2, d2)])
                   else:
-                      # 无区间，取第一个日期作为单日假期
-                      single = re.search(r'(\d{1,2})月(\d{1,2})日', off_text)
+                      single = re.search(r'(\d{1,2})月(\d{1,2})日', content)
                       if single:
                           m, d = int(single.group(1)), int(single.group(2))
                           off_list.append([get_full_date(year, m, d), get_full_date(year, m, d)])
 
-                  # ----- 提取上班日期（仅在 work_text 中）-----
+                  # 上班日期（修正后：匹配同一句子中“上班”之前的全部日期）
                   work_dates = []
-                  for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日', work_text):
+                  for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日(?=[^。]*上班)', content):
                       work_dates.append(get_full_date(year, int(m), int(d)))
-                  # 去重排序
                   work_dates = sorted(set(work_dates))
 
-                  # 构建节日对象
                   holiday_obj = {"n": name, "off": off_list}
                   if work_dates:
                       holiday_obj["work"] = work_dates
@@ -151,7 +135,7 @@ jobs:
               return content_div.get_text()
 
           def filter_december_holidays(holidays, year):
-              """只保留12月的假期，若没有则返回空列表"""
+              """只保留12月的假期"""
               filtered = []
               for h in holidays:
                   has_dec = False
