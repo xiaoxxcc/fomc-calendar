@@ -65,19 +65,27 @@ jobs:
                   name = match_name.group(1).strip()
                   content = block[match_name.end():].strip()
 
-                  # 放假日期
+                  # ----- 提取放假日期 -----
                   off_list = []
+                  # 优先匹配“月日至月日”
                   range_match = re.search(r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日', content)
                   if range_match:
                       m1, d1, m2, d2 = map(int, range_match.groups())
                       off_list.append([get_full_date(year, m1, d1), get_full_date(year, m2, d2)])
                   else:
-                      single = re.search(r'(\d{1,2})月(\d{1,2})日', content)
-                      if single:
-                          m, d = int(single.group(1)), int(single.group(2))
-                          off_list.append([get_full_date(year, m, d), get_full_date(year, m, d)])
+                      # 尝试匹配省略月份的“月日至日”（月份与起始相同）
+                      range_match2 = re.search(r'(\d{1,2})月(\d{1,2})日(?:.*?至.*?)(\d{1,2})日', content)
+                      if range_match2:
+                          m1, d1, d2 = int(range_match2.group(1)), int(range_match2.group(2)), int(range_match2.group(3))
+                          off_list.append([get_full_date(year, m1, d1), get_full_date(year, m1, d2)])
+                      else:
+                          # 单日假期
+                          single = re.search(r'(\d{1,2})月(\d{1,2})日', content)
+                          if single:
+                              m, d = int(single.group(1)), int(single.group(2))
+                              off_list.append([get_full_date(year, m, d), get_full_date(year, m, d)])
 
-                  # 上班日期（修正后：匹配同一句子中“上班”之前的全部日期）
+                  # ----- 提取上班日期 -----
                   work_dates = []
                   for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日(?=[^。]*上班)', content):
                       work_dates.append(get_full_date(year, int(m), int(d)))
