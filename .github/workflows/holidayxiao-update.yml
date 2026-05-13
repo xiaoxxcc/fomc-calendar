@@ -57,7 +57,7 @@ jobs:
           }
 
           def _normalize_numbers(text: str) -> str:
-              """将全角数字替换为半角数字，确保正则匹配"""
+              """全角数字转半角"""
               full_to_half = {
                   '０': '0', '１': '1', '２': '2', '３': '3', '４': '4',
                   '５': '5', '６': '6', '７': '7', '８': '8', '９': '9'
@@ -66,14 +66,23 @@ jobs:
                   text = text.replace(full, half)
               return text
 
+          def _remove_brackets(text: str) -> str:
+              """删除所有中英文括号及内部内容，避免括号内文字干扰日期解析"""
+              # 去除中文括号 （...）
+              text = re.sub(r'（[^）]*）', '', text)
+              # 去除英文括号 (...)
+              text = re.sub(r'\([^)]*\)', '', text)
+              return text
+
           def get_full_date(year: int, month: int, day: int) -> str:
               return f"{year:04d}-{month:02d}-{day:02d}"
 
           def parse_holiday_text(year: int, text: str):
               """
-              兼容全角数字，按节日段落分别提取放假区间和补班日期。
+              解析节假日通知，去除括号干扰后按句子提取日期。
               """
-              text = _normalize_numbers(text)  # 归一化
+              text = _normalize_numbers(text)   # 全角数字归一化
+              text = _remove_brackets(text)     # 删除所有括号内容
               holidays = []
               blocks = re.split(r'(?=(?:[一二三四五六七八九十]+|\d+)、)', text)
               for block in blocks:
@@ -89,36 +98,34 @@ jobs:
                   off_dates = []
                   work_dates = set()
 
-                  # 提取补班日（上班句子）
+                  # 补班句子（含“上班”）
                   work_sents = re.findall(r'[^。；]*(?:上班)[^。；]*', body)
                   for ws in work_sents:
                       for m, d in re.findall(r'(\d{1,2})月(\d{1,2})日', ws):
                           work_dates.add(get_full_date(year, int(m), int(d)))
 
-                  # 提取放假区间（放假/休假句子）
+                  # 放假句子（含“放假”或“休假”）
                   off_sents = re.findall(r'[^。；]*(?:放假|休假)[^。；]*', body)
                   for osent in off_sents:
-                      # 1. 跨月区间：X月X日...至...X月X日
+                      # 跨月区间：X月X日...至...X月X日
                       cross = re.search(
-                          r'(\d{1,2})月(\d{1,2})日(?:[^月]*?)至(?:[^月]*?)(\d{1,2})月(\d{1,2})日',
+                          r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})月(\d{1,2})日',
                           osent
                       )
                       if cross:
                           m1, d1, m2, d2 = map(int, cross.groups())
                           off_dates.append([get_full_date(year, m1, d1), get_full_date(year, m2, d2)])
                           continue
-
-                      # 2. 同月区间：X月X日至X日
+                      # 同月区间：X月X日至X日
                       same = re.search(
-                          r'(\d{1,2})月(\d{1,2})日(?:[^月]*?)至(?:[^月]*?)(\d{1,2})日',
+                          r'(\d{1,2})月(\d{1,2})日.*?至.*?(\d{1,2})日',
                           osent
                       )
                       if same:
                           m1, d1, d2 = map(int, same.groups())
                           off_dates.append([get_full_date(year, m1, d1), get_full_date(year, m1, d2)])
                           continue
-
-                      # 3. 单日假期（取第一个月日组合）
+                      # 单日假期（取第一个月日组合）
                       single = re.search(r'(\d{1,2})月(\d{1,2})日', osent)
                       if single:
                           m, d = map(int, single.groups())
