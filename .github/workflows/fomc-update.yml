@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 1. 拉取仓库代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6      # 升级至 v6，原生支持 Node.js 24，消除弃用警告
         with:
           fetch-depth: 1
 
