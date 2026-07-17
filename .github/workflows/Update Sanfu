@@ -1,0 +1,254 @@
+name: Auto Update Sanfu Calendar
+
+on:
+  schedule:
+    # 每月1号 UTC 14:00 = 北京时间 22:00（每年初即可获取当年三伏天）
+    - cron: '0 14 1 * *'
+  workflow_dispatch:   # 手动触发测试
+
+permissions:
+  contents: write
+
+jobs:
+  update-sanfu-ics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 检出仓库代码
+        uses: actions/checkout@v6
+
+      - name: 2. 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: 3. 计算三伏天并生成日历文件
+        run: |
+          python << 'PYEOF'
+          import subprocess, json, sys
+          from datetime import datetime, timedelta
+
+          # 定义计算三伏天的 JS 代码（基于用户提供的天文算法，并改为输出JSON）
+          js_code = r"""
+          var main=function(){
+              const St=["小寒","大寒","立春","雨水","惊蛰","春分","清明","谷雨","立夏","小满","芒种","夏至","小暑","大暑","立秋","处暑","白露","秋分","寒露","霜降","立冬","小雪","大雪","冬至"],
+              Si=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
+              Sl=[285,300,315,330,345,0,15,30,45,60,75,90,105,120,135,150,165,180,195,210,225,240,255,270],
+              p1=Math.PI/180,
+              Gn=["甲","乙","丙","丁","戊","己","庚","辛","壬","癸"],
+              Zh=["子","丑","寅","卯","辰","巳","午","未","申","酉","戌","亥"];
+              function P(n){return n<10?"0"+n:n;}
+              function D(x){
+                  var y=x.getUTCFullYear(),m=x.getUTCMonth()+1,
+                  dv=x.getUTCDate()+(x.getUTCHours()+x.getUTCMinutes()/60+x.getUTCSeconds()/3600)/24;
+                  if(m<=2){y--;m+=12;}
+                  var A=Math.floor(y/100);
+                  return Math.floor(365.25*(y+4716))+Math.floor(30.6001*(m+1))+dv+(2-A+Math.floor(A/4))-1524.5;
+              }
+              function j2d(j){
+                  j+=0.5;
+                  var Z=Math.floor(j),F=j-Z,
+                  A=Z>=2299161?Math.floor((Z-1867216.25)/36524.25):0;
+                  A=Z+1+A-Math.floor(A/4);
+                  var B=A+1524,C=Math.floor((B-122.1)/365.25),
+                  D=Math.floor(365.25*C),E=Math.floor((B-D)/30.6001),
+                  d=B-D-Math.floor(30.6001*E)+F,
+                  m=E<14?E-1:E-13,
+                  y=m>2?C-4716:C-4715,
+                  h=Math.floor(d%1*24),
+                  mi=Math.floor((d%1*24-h)*60),
+                  ss=Math.floor(((d%1*24-h)*60-mi)*60);
+                  return new Date(Date.UTC(y,m-1,Math.floor(d),h,mi,ss));
+              }
+              function C(j){
+                  var t=(j-2451545)/36525,
+                  L=(280.46646+36000.76983*t+0.0003032*t*t)%360,
+                  M=(357.52911+35999.05029*t-0.0001537*t*t)%360,
+                  e=0.016708634-0.000042037*t-0.0000001267*t*t,
+                  vc=(1.914602-0.004817*t-0.000014*t*t)*Math.sin(M*p1)+
+                      (0.019993-0.000101*t)*Math.sin(2*M*p1)+0.000289*Math.sin(3*M*p1),
+                  tL=L+vc,
+                  n1=(125.04452-1934.136261*t+0.0020708*t*t)%360,
+                  n=(-17.1996*Math.sin(n1*p1)-
+                      1.3187*Math.sin((2*(297.85036+445267.11148*t)+n1)*p1))/3600,
+                  aa=-20.49552/(3600*(1-e*Math.cos((M+vc)*p1)));
+                  return (tL+n+aa+360)%360;
+              }
+              function T(y,t){
+                  var j=D(new Date(Date.UTC(y,2,20)))+t*1.01456166,i=0,dv;
+                  while(i++<10){
+                      dv=(C(j)-t+360)%360;
+                      dv=dv>180?dv-360:dv;
+                      if(dv*dv<1e-12)break;
+                      j-=dv/0.985647;
+                  }
+                  return j;
+              }
+              function fm(dt){
+                  var u=new Date(dt.getTime()+288e5);
+                  return u.getUTCFullYear()+"-"+P(u.getUTCMonth()+1)+"-"+P(u.getUTCDate())+
+                         " "+P(u.getUTCHours())+":"+P(u.getUTCMinutes());
+              }
+              function gA(y){
+                  var r=[];
+                  for(var i=0;i<24;i++){
+                      var l=Sl[i],n=St[i],ix=Si[i],cy=y;
+                      if(i<2){
+                          var tj=T(y,l),td=j2d(tj);
+                          if(td.getUTCMonth()<11)cy=y-1;
+                      }
+                      var jd=T(cy,l),d=j2d(jd),ds=fm(d),dp=ds.split(" ")[0].split("-"),
+                      ty=parseInt(dp[0]);
+                      if(ty!==y){
+                          if(ty<y)jd=T(y+1,l);else jd=T(y-1,l);
+                          d=j2d(jd);ds=fm(d);
+                      }
+                      r.push({n:n,i:ix,d:ds});
+                  }
+                  return r;
+              }
+              function tG(o){return Gn[o%10]+Zh[o%12];}
+              function iG(y,m,d){
+                  var dc=Date.UTC(y,m-1,1,0,0,0,0)/86400000+25567+10;
+                  return tG(dc+d-1).charAt(0)==='庚';
+              }
+              function gX(y){
+                  var t=gA(y),xz=t.find(t=>t.n==="夏至");
+                  if(!xz)return null;
+                  var [u,v,w]=xz.d.split(" ")[0].split("-").map(Number);
+                  return new Date(u,v-1,w);
+              }
+              function gL(y){
+                  var t=gA(y),lq=t.find(t=>t.n==="立秋");
+                  if(!lq)return null;
+                  var [u,v,w]=lq.d.split(" ")[0].split("-").map(Number);
+                  return new Date(u,v-1,w);
+              }
+              function gS(y){
+                  var r={cf:null,zf:null,mf:null},xd=gX(y),ld=gL(y);
+                  if(!xd||!ld)return r;
+                  var sd=xd.getDate(),ad=ld.getDate(),gc=0,dt=new Date(y,5,sd);
+                  while(gc<3){
+                      if(iG(dt.getFullYear(),dt.getMonth()+1,dt.getDate())){
+                          gc++;if(gc===3)r.cf=new Date(dt);
+                      }
+                      dt.setDate(dt.getDate()+1);
+                  }
+                  while(gc<4){
+                      if(iG(dt.getFullYear(),dt.getMonth()+1,dt.getDate())){
+                          gc++;if(gc===4)r.zf=new Date(dt);
+                      }
+                      dt.setDate(dt.getDate()+1);
+                  }
+                  dt=new Date(y,7,ad);
+                  while(true){
+                      if(iG(dt.getFullYear(),dt.getMonth()+1,dt.getDate())){
+                          r.mf=new Date(dt);break;
+                      }
+                      dt.setDate(dt.getDate()+1);
+                  }
+                  return r;
+              }
+              function fmtDt(d){
+                  return P(d.getMonth()+1)+"/"+P(d.getDate());
+              }
+              var nw=new Date(),yr=nw.getFullYear();
+              var sf=gS(yr);
+              // 返回JSON，方便Python解析
+              return JSON.stringify({
+                  year: yr,
+                  chufu: sf.cf ? fmtDt(sf.cf) : null,
+                  zhongfu: sf.zf ? fmtDt(sf.zf) : null,
+                  mofu: sf.mf ? fmtDt(sf.mf) : null
+              });
+          };
+          console.log(main());
+          """
+
+          # 调用 Node.js 执行
+          result = subprocess.run(
+              ['node', '-e', js_code],
+              capture_output=True,
+              text=True,
+              timeout=30
+          )
+          if result.returncode != 0:
+              print("Node.js 执行失败：", result.stderr)
+              sys.exit(1)
+
+          # 解析 JSON
+          data = json.loads(result.stdout.strip())
+          year = data['year']
+          chufu = data['chufu']     # "MM/DD"
+          zhongfu = data['zhongfu']
+          mofu = data['mofu']
+
+          print(f"✅ 计算完成：{year}年 初伏{chufu} 中伏{zhongfu} 末伏{mofu}")
+
+          # 生成 .ics 文件
+          ics_lines = [
+              "BEGIN:VCALENDAR",
+              "VERSION:2.0",
+              "PRODID:-//AutoSanfu//Sanfu Calendar//CN",
+              "CALSCALE:GREGORIAN",
+              "METHOD:PUBLISH",
+              f"X-WR-CALNAME:{year}年三伏天",
+              "X-WR-TIMEZONE:Asia/Shanghai",
+              "BEGIN:VTIMEZONE",
+              "TZID:Asia/Shanghai",
+              "X-LIC-LOCATION:Asia/Shanghai",
+              "BEGIN:STANDARD",
+              "TZOFFSETFROM:+0800",
+              "TZOFFSETTO:+0800",
+              "TZNAME:CST",
+              "DTSTART:19700101T000000",
+              "END:STANDARD",
+              "END:VTIMEZONE",
+          ]
+
+          def add_event(summary, mmdd):
+              if not mmdd:
+                  return
+              month, day = mmdd.split('/')
+              date_str = f"{year}{month}{day}"
+              # 结束日期 = 次日
+              end_dt = datetime(year, int(month), int(day)) + timedelta(days=1)
+              end_str = end_dt.strftime("%Y%m%d")
+              ics_lines.append("BEGIN:VEVENT")
+              ics_lines.append(f"DTSTART;VALUE=DATE:{date_str}")
+              ics_lines.append(f"DTEND;VALUE=DATE:{end_str}")
+              ics_lines.append(f"SUMMARY:{summary}")
+              ics_lines.append(f"DESCRIPTION:{year}年三伏天 - {summary}开始")
+              ics_lines.append("TRANSP:TRANSPARENT")
+              ics_lines.append("END:VEVENT")
+
+          add_event("初伏", chufu)
+          add_event("中伏", zhongfu)
+          add_event("末伏", mofu)
+
+          ics_lines.append("END:VCALENDAR")
+
+          with open("sanfu.ics", "w", encoding="utf-8") as f:
+              f.write("\n".join(ics_lines) + "\n")
+
+          print("📅 sanfu.ics 生成完毕")
+          PYEOF
+
+      - name: 4. 预览生成的文件
+        run: |
+          echo "=== sanfu.ics 内容预览 ==="
+          head -20 sanfu.ics
+
+      - name: 5. 提交更新到仓库
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sanfu.ics
+
+          if git diff --staged --quiet; then
+            echo "ℹ️ 文件内容无变化，跳过提交。"
+          else
+            BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
+            git commit -m "🌞 更新三伏天日历 [${BEIJING_TIME} 北京时间]"
+            git push
+            echo "✅ 更新已推送！"
+          fi
