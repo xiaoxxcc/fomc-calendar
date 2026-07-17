@@ -2,9 +2,9 @@ name: Auto Update Sanfu Calendar
 
 on:
   schedule:
-    # 每月1号 UTC 14:00 = 北京时间 22:00（每年初即可获取当年三伏天）
+    # 每月1号 UTC 14:00 = 北京时间 22:00
     - cron: '0 14 1 * *'
-  workflow_dispatch:   # 手动触发测试
+  workflow_dispatch:   # 允许手动触发
 
 permissions:
   contents: write
@@ -27,7 +27,7 @@ jobs:
           import subprocess, json, sys
           from datetime import datetime, timedelta
 
-          # 定义计算三伏天的 JS 代码（基于用户提供的天文算法，并改为输出JSON）
+          # 完整 JS 天文算法（未来5年循环）
           js_code = r"""
           var main=function(){
               const St=["小寒","大寒","立春","雨水","惊蛰","春分","清明","谷雨","立夏","小满","芒种","夏至","小暑","大暑","立秋","处暑","白露","秋分","寒露","霜降","立冬","小雪","大雪","冬至"],
@@ -151,20 +151,26 @@ jobs:
               function fmtDt(d){
                   return P(d.getMonth()+1)+"/"+P(d.getDate());
               }
-              var nw=new Date(),yr=nw.getFullYear();
-              var sf=gS(yr);
-              // 返回JSON，方便Python解析
-              return JSON.stringify({
-                  year: yr,
-                  chufu: sf.cf ? fmtDt(sf.cf) : null,
-                  zhongfu: sf.zf ? fmtDt(sf.zf) : null,
-                  mofu: sf.mf ? fmtDt(sf.mf) : null
-              });
+              // 计算当前年及未来4年（共5年）
+              var nw=new Date();
+              var startYear=nw.getFullYear();
+              var results=[];
+              for(var offset=0;offset<5;offset++){
+                  var yr=startYear+offset;
+                  var sf=gS(yr);
+                  results.push({
+                      year:yr,
+                      chufu:sf.cf?fmtDt(sf.cf):null,
+                      zhongfu:sf.zf?fmtDt(sf.zf):null,
+                      mofu:sf.mf?fmtDt(sf.mf):null
+                  });
+              }
+              return JSON.stringify(results);
           };
           console.log(main());
           """
 
-          # 调用 Node.js 执行
+          # 调用 Node.js 执行 JS 脚本
           result = subprocess.run(
               ['node', '-e', js_code],
               capture_output=True,
@@ -175,23 +181,20 @@ jobs:
               print("Node.js 执行失败：", result.stderr)
               sys.exit(1)
 
-          # 解析 JSON
-          data = json.loads(result.stdout.strip())
-          year = data['year']
-          chufu = data['chufu']     # "MM/DD"
-          zhongfu = data['zhongfu']
-          mofu = data['mofu']
+          # 解析返回的 JSON 数组（包含5年的数据）
+          all_data = json.loads(result.stdout.strip())
+          min_year = all_data[0]['year']
+          max_year = all_data[-1]['year']
+          print(f"✅ 计算完成：{min_year}～{max_year}年三伏天")
 
-          print(f"✅ 计算完成：{year}年 初伏{chufu} 中伏{zhongfu} 末伏{mofu}")
-
-          # 生成 .ics 文件
+          # 开始构建 .ics 内容
           ics_lines = [
               "BEGIN:VCALENDAR",
               "VERSION:2.0",
               "PRODID:-//AutoSanfu//Sanfu Calendar//CN",
               "CALSCALE:GREGORIAN",
               "METHOD:PUBLISH",
-              f"X-WR-CALNAME:{year}年三伏天",
+              f"X-WR-CALNAME:{min_year}-{max_year}年三伏天",
               "X-WR-TIMEZONE:Asia/Shanghai",
               "BEGIN:VTIMEZONE",
               "TZID:Asia/Shanghai",
@@ -205,12 +208,12 @@ jobs:
               "END:VTIMEZONE",
           ]
 
-          def add_event(summary, mmdd):
+          def add_event(year, summary, mmdd):
               if not mmdd:
                   return
               month, day = mmdd.split('/')
               date_str = f"{year}{month}{day}"
-              # 结束日期 = 次日
+              # 全天事件的结束日期是次日（不包含）
               end_dt = datetime(year, int(month), int(day)) + timedelta(days=1)
               end_str = end_dt.strftime("%Y%m%d")
               ics_lines.append("BEGIN:VEVENT")
@@ -221,9 +224,12 @@ jobs:
               ics_lines.append("TRANSP:TRANSPARENT")
               ics_lines.append("END:VEVENT")
 
-          add_event("初伏", chufu)
-          add_event("中伏", zhongfu)
-          add_event("末伏", mofu)
+          # 为每一年添加初伏、中伏、末伏事件
+          for data in all_data:
+              y = data['year']
+              add_event(y, "初伏", data['chufu'])
+              add_event(y, "中伏", data['zhongfu'])
+              add_event(y, "末伏", data['mofu'])
 
           ics_lines.append("END:VCALENDAR")
 
@@ -235,8 +241,8 @@ jobs:
 
       - name: 4. 预览生成的文件
         run: |
-          echo "=== sanfu.ics 内容预览 ==="
-          head -20 sanfu.ics
+          echo "=== sanfu.ics 内容预览（前30行）==="
+          head -30 sanfu.ics
 
       - name: 5. 提交更新到仓库
         run: |
