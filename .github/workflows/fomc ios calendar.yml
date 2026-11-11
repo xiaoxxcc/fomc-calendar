@@ -1,0 +1,124 @@
+name: Auto Update FOMC IOS Calendar
+
+on:
+  schedule:
+    # 每月1号 UTC 14:00 = 北京时间 22:00
+    - cron: '0 14 1 * *'
+  workflow_dispatch:   # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  update-fomc-ics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 检出仓库代码
+        uses: actions/checkout@v6
+
+      - name: 2. 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: 3. 拉取 FOMC 数据并生成日历文件
+        run: |
+          python << 'PYEOF'
+          import json, sys, urllib.request
+          from datetime import datetime, timedelta
+
+          URL = "https://cdn.jsdelivr.net/gh/xiaoxxcc/fomc-calendar@main/fomc_calendar.json"
+
+          # 同步拉取（等价于原小组件的同步 XMLHttpRequest）
+          try:
+              req = urllib.request.Request(
+                  URL, headers={"User-Agent": "fomc-calendar-bot"}
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  data = json.loads(resp.read().decode("utf-8"))
+          except Exception as e:
+              print("❌ 拉取 FOMC 数据失败：", e)
+              sys.exit(1)
+
+          meetings = data.get("meetings", [])
+          if not meetings:
+              print("❌ 会议列表为空")
+              sys.exit(1)
+
+          def parse_date(s):
+              # 兼容 2025-01-29 与 2025-01-28T19:00:00 两种格式
+              return datetime.strptime(s.split("T")[0], "%Y-%m-%d").date()
+
+          # 核心：提醒日 = end_date + 1 天（即原小组件 d === 0 命中的那天）
+          reminders = []
+          for m in meetings:
+              end_str = m.get("end_date")
+              if not end_str:
+                  continue
+              remind_d = parse_date(end_str) + timedelta(days=1)
+              reminders.append((remind_d, bool(m.get("is_sep"))))
+
+          reminders.sort()
+          years = sorted({r[0].year for r in reminders})
+          year_range = f"{years[0]}-{years[-1]}" if years else "FOMC"
+
+          # 构建 .ics
+          ics = [
+              "BEGIN:VCALENDAR",
+              "VERSION:2.0",
+              "PRODID:-//AutoFOMC//FOMC Reminder//EN",
+              "CALSCALE:GREGORIAN",
+              "METHOD:PUBLISH",
+              f"X-WR-CALNAME:FOMC 会议提醒 {year_range}",
+              "X-WR-TIMEZONE:America/New_York",
+          ]
+
+          def fmt(d):
+              return d.strftime("%Y%m%d")
+
+          for remind_d, is_sep in reminders:
+              # 含 SEP 的会议用 ☆ 前缀区分（对应原小组件 is_sep 分支）
+              summary = "☆FOMC" if is_sep else "FOMC"
+              # 全天事件：DTSTART = 提醒日；DTEND = 次日（iCalendar 开区间语法，不多显示一天）
+              dtend = remind_d + timedelta(days=1)
+              # DTSTAMP 用提醒日构造（而非 datetime.utcnow），保证数据不变时文件字节级不变
+              dtstamp = remind_d.strftime("%Y%m%dT000000Z")
+              ics += [
+                  "BEGIN:VEVENT",
+                  f"UID:fomc-remind-{fmt(remind_d)}@auto-fomc",
+                  f"DTSTAMP:{dtstamp}",
+                  f"DTSTART;VALUE=DATE:{fmt(remind_d)}",
+                  f"DTEND;VALUE=DATE:{fmt(dtend)}",
+                  f"SUMMARY:{summary}",
+                  f"DESCRIPTION:{remind_d} 全天提醒（FOMC 会议已于昨日结束）",
+                  "TRANSP:TRANSPARENT",
+                  "END:VEVENT",
+              ]
+
+          ics.append("END:VCALENDAR")
+
+          with open("fomc.ics", "w", encoding="utf-8") as f:
+              f.write("\n".join(ics) + "\n")
+
+          print(f"✅ fomc.ics 生成完毕，共 {len(reminders)} 个提醒（{year_range}）")
+          PYEOF
+
+      - name: 4. 预览生成的文件
+        run: |
+          echo "=== fomc.ics 内容预览（前 40 行）==="
+          head -40 fomc.ics
+
+      - name: 5. 提交更新到仓库
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add fomc.ics
+
+          if git diff --staged --quiet; then
+            echo "ℹ️ 文件内容无变化，跳过提交。"
+          else
+            BEIJING_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
+            git commit -m "🏦 更新 FOMC 会议提醒日历 [${BEIJING_TIME} 北京时间]"
+            git push
+            echo "✅ 更新已推送！"
+          fi
