@@ -1,6 +1,6 @@
 {
   "meta": {
-    "last_updated": "2026-11-07T04:38:27.614596+08:00",
+    "last_updated": "2026-11-14T05:03:05.665010+08:00",
     "source": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
     "count": 16,
     "note": "FOMC Meeting Calendar Data (当前年及未来)",
@@ -66,7 +66,7 @@
       "year": 2027,
       "start_date": "2027-03-16",
       "end_date": "2027-03-17",
-      "is_sep": true
+      "is_sep": false
     },
     {
       "year": 2027,
@@ -78,7 +78,7 @@
       "year": 2027,
       "start_date": "2027-06-08",
       "end_date": "2027-06-09",
-      "is_sep": true
+      "is_sep": false
     },
     {
       "year": 2027,
@@ -90,7 +90,7 @@
       "year": 2027,
       "start_date": "2027-09-14",
       "end_date": "2027-09-15",
-      "is_sep": true
+      "is_sep": false
     },
     {
       "year": 2027,
@@ -100,9 +100,9 @@
     },
     {
       "year": 2027,
-      "start_date": "2027-12-07",
-      "end_date": "2027-12-08",
-      "is_sep": true
+      "start_date": "2027-11-16",
+      "end_date": "2027-11-17",
+      "is_sep": false
     }
   ]
 }
