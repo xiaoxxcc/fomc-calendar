@@ -3,7 +3,7 @@ name: Auto Update FOMC IOS Calendar
 on:
   schedule:
     # 每月1号 UTC 14:00 = 北京时间 22:00
-    - cron: '0 14 1 * *'
+    - cron: '0 14 1,11,21 * *'
   workflow_dispatch:   # 允许手动触发
 
 permissions:
