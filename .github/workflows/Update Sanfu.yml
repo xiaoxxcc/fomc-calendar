@@ -221,7 +221,7 @@ jobs:
               { name: '夫人', type: 'lunar', m: 3,  d: 9,  birth: 1987 },
               { name: '胥妈', type: 'lunar', m: 10, d: 24, birth: 1962 },
               { name: '胥爹', type: 'lunar', m: 4,  d: 24, birth: 1963 },
-              { name: 'MY',   type: 'lunar', m: 10, d: 29, birth: 1983 },
+              { name: 'Me',   type: 'lunar', m: 10, d: 29, birth: 1983 },
               { name: '老妈', type: 'lunar', m: 12, d: 8,  birth: 1957 },
               { name: '夫人', type: 'solar', m: 4,  d: 6,  birth: 1987 }
           ];
@@ -401,7 +401,7 @@ jobs:
           head -30 sanfu.ics
           echo ""
           echo "=== 生日事件预览 ==="
-          grep 'SUMMARY:夫人\|SUMMARY:胥妈\|SUMMARY:胥爹\|SUMMARY:MY\|SUMMARY:老妈' sanfu.ics || true
+          grep 'SUMMARY:夫人\|SUMMARY:胥妈\|SUMMARY:胥爹\|SUMMARY:Me\|SUMMARY:老妈' sanfu.ics || true
 
       - name: 5. 提交更新到仓库
         run: |
